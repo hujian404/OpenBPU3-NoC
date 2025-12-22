@@ -15,6 +15,7 @@ streams/
 project/target/
 project/project/
 mill/target/
+project/
 task-temp-directory/
 .bloop/
 
@@ -26,3 +27,4 @@ task-temp-directory/
 # Other
 node_modules/
 *.swp
+.metals/
