@@ -1,3 +1,7 @@
+更多测试使用与命令请参阅使用指南：[NoC_Usage_Guide.md](NoC_Usage_Guide.md)。
+
+注意：使用 mill 运行选择性测试时，部分 mill 版本/配置无法正确将 `--` 分隔符与后续 ScalaTest 参数转发到 ScalaTest（会出现 "Argument unrecognized by ScalaTest's Runner: --" 错误）。遇到该问题时建议使用 `sbt "testOnly *<SpecName>"`，或在 `build.sc` 中添加自定义 mill 测试目标以支持参数转发。
+
 # OpenBPU NoC设计文档
 
 ## 1. 项目概述
@@ -36,12 +40,14 @@ SM（L1/Shared Memory）→ SM-Router → MC-Router → L2切片
 
 ### 3.1 Flit格式
 
-64位UInt结构：
-- `flitType` (2位)：DATA/REQUEST/RESPONSE/CONTROL
-- `isLast` (1位)：是否为最后一个Flit
-- `vc` (1位)：虚拟通道ID
-- `destId` (7位)：目标ID
-- `data` (48位)：数据负载
+- 字段位宽由 `NoCParams` 动态计算，保证 `flitWidth` 可配置并且头部/数据区灵活分配；实现中按以下原则：
+  - `flitType` (2 位)：DATA / REQUEST / RESPONSE / CONTROL
+  - `isLast` (1 位)：是否为最后一个 Flit
+  - `vc` (log2Ceil(params.numVCs) 位)：虚拟通道 ID
+  - `destId` (log2Ceil(params.numSMs.max(params.numL2Slices)) 位)：目标 ID（低位用于 GPU-friendly 切片映射）
+  - `data` (params.flitWidth - headerWidth 位)：数据负载
+
+说明：此前文档中以固定 64 位示例给出字段划分，当前实现已改为参数化计算 `destId` 与 `data` 的位宽，以便适配不同的 `params.flitWidth` 和 GPU 规模映射要求。
 
 ### 3.2 Router设计范式
 
@@ -176,6 +182,11 @@ OpenBPU NoC路由器采用6级流水线架构，实现高效的Flit转发。SM-R
 4. **端口优先级**：支持对关键端口设置优先级，优化关键路径性能
 5. **流水线停顿控制**：当下游资源不可用时，通过ready信号控制流水线停顿
 
+实现注记：最近实现对流水线做了进一步改造——RC、VA、SA、ST 之间的边界在多个位置用短深度 `Queue` (depth=2) 队列化，以减少大量的 RegNext 寄存器并提供弹性 backpressure：
+- RC 输入改为 `Decoupled(Flit)`，便于在 RC 前后插入队列；
+- 已实现队列化的边界：RC→VA、VA→SA、SA→ST、ST→LT（ST→LT 使用 per-output/VC 的短队列）；
+- 该改动提升了对反压的适应能力并简化了 ready/valid 管线控制逻辑。
+
 ## 4. 实现细节
 
 ### 4.1 参数化配置
@@ -196,9 +207,12 @@ case class NoCParams(
 
 ```scala
 class NoCInterface(params: NoCParams) extends Bundle {
+  // Flit 使用 Decoupled 握手（支持在 RC 前后插入 Queue）
   val flit = Decoupled(new Flit(params))
-  val creditIn = Input(UInt(params.creditWidth.W))
-  val creditOut = Output(UInt(params.creditWidth.W))
+
+  // 信用改为 per-VC 向量：每个 VC 单独计数，便于精细流控
+  val creditIn = Input(Vec(params.numVCs, UInt(log2Ceil(params.bufferDepth + 1).W)))
+  val creditOut = Output(Vec(params.numVCs, UInt(log2Ceil(params.bufferDepth + 1).W)))
 }
 ```
 
@@ -242,6 +256,9 @@ class NoCInterface(params: NoCParams) extends Bundle {
 | 文件名 | 功能描述 |
 |-------|---------|
 | OpenBPUNoCSpec.scala | NoC功能测试 |
+| BufferSpec.scala | `InputBuffer` 单元测试（信用计数与FIFO行为验证） |
+| VCAllocatorSpec.scala | `VCAllocator` 单元测试（请求→grant 行为验证） |
+| RouterArbiterSpec.scala | `RouterArbiter` 单元测试（输出端口互斥授予验证） |
 
 ## 6. 编译和测试结果
 
@@ -295,6 +312,26 @@ sbt test
 ### 6.5 Verilog生成
 成功生成 `OpenBPUNoC.sv` 文件，位于 `generated` 目录。
 
+## 7. 测试覆盖与验证方法
+
+本工程配套的 Scala/Chisel 测试覆盖了以下几个维度：
+
+- **参数与接口正确性**：通过 `OpenBPUNoCSpec.scala` 中对 `NoCParams` 的派生参数测试和 `Flit` 字段位宽检查，确保参数化配置与接口宽度一致性。
+- **模块级边界行为**：`BufferSpec.scala`、`VCAllocatorSpec.scala` 和 `RouterArbiterSpec.scala` 对 `InputBuffer`、`VCAllocator`、`RouterArbiter` 等关键模块的边界条件与仲裁逻辑进行单元验证。
+- **协议与流控**：`CreditFlowSpec.scala` 验证信用流控制在下游信用为 0 时阻止上游注入的安全性。
+- **端到端功能**：`RouterEndToEndSpec.scala` 将一个 flit 从 SM 注入，观察 L2 是否在有限周期内接收，用于验证流水线与路径连通性。
+
+这些测试在源码层（`src/test/scala/openbpu/`）以 `ChiselScalatestTester` 与 ScalaTest 编写，既包含快速单元回归，又包含简化的端到端集成验证。
+
+验证建议流程：
+
+1. 使用 `sbt` 或 `mill` 完整编译工程（参见 [NoC_Usage_Guide.md](NoC_Usage_Guide.md)）。
+2. 运行单元测试（`sbt test` 或 `mill MyNoC.test`），优先保证 `BufferSpec`、`VCAllocatorSpec`、`RouterArbiterSpec` 通过。
+3. 通过 `OpenBPUNoCTestGenerator` 生成 `SimpleNoCTest` 的 SystemVerilog，用仿真工具（Verilator / VCS / Questa）复现更复杂的时序/负载场景。
+4. 将关键失败用例回溯到模块边界（例如检查 `creditIn`/`creditOut` 初值、VC 分配逻辑）并补充断言或额外的单元测试。
+
+更多测试使用与命令请参阅使用指南：[NoC_Usage_Guide.md](NoC_Usage_Guide.md)。
+
 ## 7. 性能优化方向
 
 1. 仲裁策略优化
@@ -325,3 +362,5 @@ sbt test
 **文档版本**：v1.0
 **创建日期**：2025年12月18日
 **作者**：H.J
+**文档版本**：v1.1
+**更新日期**：2025年12月22日

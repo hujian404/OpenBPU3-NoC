@@ -93,6 +93,15 @@ class TestL2Slice(params: NoCParams) extends Module {
 
 ```scala
 class SimpleNoCTest extends Module {
+### 2.4 新增单元测试
+
+为提高关键模块的回归覆盖，新增以下基于 ChiselTest 的单元测试：
+
+- `BufferSpec.scala`：验证 `InputBuffer` 的信用计数、入队/出队语义以及边界行为。
+- `VCAllocatorSpec.scala`：验证 `VCAllocator` 在单一或并发请求下的 grant 行为。
+- `RouterArbiterSpec.scala`：验证 `RouterArbiter` 对同一输出端口的互斥授予（最多一个输入获 grant）。
+
+这些测试位于 `src/test/scala/openbpu/`，并使用 `ChiselScalatestTester` 的 `poke`/`peek` 接口进行激励与断言。
   val params = NoCParams(
     numSMClusters = 2,
     numMCs = 2,
@@ -252,6 +261,27 @@ object OpenBPUNoCTestGenerator extends App {
 3. **生成测试Verilog**：使用`OpenBPUNoCTestGenerator`生成集成测试模块的Verilog
 4. **验证测试结果**：检查测试用例是否通过，分析生成的Verilog代码
 
+示例命令（sbt）：
+
+```bash
+# 编译
+sbt compile
+
+# 运行所有测试
+sbt test
+
+# 仅运行新增的单元测试
+sbt "testOnly *VCAllocatorSpec"
+sbt "testOnly *RouterArbiterSpec"
+sbt "testOnly *BufferSpec"
+# mill - 通过 ScalaTest 的 `-z` 模式选择匹配的测试名
+mill MyNoC.test -- -z "VCAllocatorSpec"
+mill MyNoC.test -- -z "RouterArbiterSpec"
+mill MyNoC.test -- -z "BufferSpec"
+```
+
+注意：在一些环境或 mill 版本中，尝试通过 `mill ... -- -z "<pattern>"` 把参数传给 ScalaTest 会导致 ScalaTest 报错（例如收到未识别的 `--` 参数）。如果发生此类问题，请优先使用 `sbt "testOnly *<SpecName>"` 来做选择性测试，或在 `build.sc` 中添加一个自定义 mill 任务以接受并转发测试过滤参数。
+
 ## 7. 总结
 
 OpenBPU NoC的测试代码采用了模块化、分层的设计理念，通过以下方式确保测试的有效性：
@@ -269,3 +299,37 @@ OpenBPU NoC的测试代码采用了模块化、分层的设计理念，通过以
 **文档版本**：v1.0
 **创建日期**：2025年12月18日
 **作者**：H.J
+
+**文档版本**：v1.1
+**更新日期**：2025年12月22日
+ 
+## 8. 测试文件快速索引与说明
+
+- **OpenBPUNoCSpec.scala**: 顶层功能与参数化测试集合。包含：`NoCParams`派生参数测试、不同配置支持测试、以及`Flit`字段位宽/总宽度一致性检查。该文件也包含 `TestSM` / `TestL2Slice` / `SimpleNoCTest` 的 RTL 测试模块生成逻辑（可用于生成 SystemVerilog 以作更高层级验证）。
+- **BufferSpec.scala**: 使用 `ChiselScalatestTester` 对 `InputBuffer` 的信用计数、入队/出队语义和边界行为进行单元测试（通过 `poke` / `peek` 驱动和断言）。
+- **VCAllocatorSpec.scala**: 验证 `VCAllocator` 在单输入请求或并发请求下的 grant 行为，确保每个输出 VC 的分配公平性。此测试直接对 `VCAllocator` 模块施加请求向量并检查 `grant` 输出。
+- **RouterArbiterSpec.scala**: 验证 `RouterArbiter` 在多个输入同时请求同一输出端口时的互斥性（最多仅一个输入获 grant），用于证明交换片层面仲裁正确性。
+- **RouterEndToEndSpec.scala**: 端到端功能测试，将一个 flit 从 SM 注入并观察 L2 是否在有限周期内接收，验证整体路径（包含缓冲、路由计算、仲裁和链路）连通性。
+- **CreditFlowSpec.scala**: 验证信用流控制行为：当下游信用为 0 时，NoC 应阻止上游注入，确保流量控制安全性。
+
+## 9. 测试编写与验证要点（实战提示）
+
+- 使用 `ChiselScalatestTester` 的 `test` 框架时，尽量在测试内对 `creditIn` / `creditOut` 做显式初始化，避免因默认值导致的不可重复行为。
+- 对于需要观测跨阶段传播的信号（例如 RC→VA→SA 的延迟），在断言前多跑几个 `clock.step()` 以允许管线推进。
+- 单元测试优先覆盖模块边界行为（例如 `InputBuffer` 的边界条件、VCAllocator 的竞争情形），集成测试用于覆盖端到端时序与协议交互。
+
+## 10. 生成 Verilog 与集成验证推荐流程
+
+1. 使用 `sbt` 或 `mill` 编译（见使用指南）。
+2. 用 `sbt` / `mill` 运行 ScalaTest 单元测试，确保所有单元测试通过。
+3. 使用 `OpenBPUNoCTestGenerator` 或项目中的 `NoCGenerator` 生成 SystemVerilog：
+
+```bash
+# 使用 sbt
+sbt "runMain openbpu.OpenBPUNoCTestGenerator"
+
+# 使用 mill (若 build.sc 中已定义 runMain)
+mill MyNoC.runMain openbpu.OpenBPUNoCTestGenerator
+```
+
+4. 将生成的 `generated/OpenBPUNoC.sv` 在 Verilator / Questa / VCS 中做功能仿真，接入更复杂的 TB 驱动以验证真实负载场景。

@@ -13,16 +13,18 @@ trait FlitType {
 
 // Flit格式定义
 class Flit(params: NoCParams) extends Bundle {
-  // Flit头部信息 (16 bits)
+  // Flit头部信息
   val flitType = UInt(2.W)            // Flit类型
-  val isLast = Bool()                  // 是否为包的最后一个Flit
+  val isLast = Bool()                 // 是否为包的最后一个Flit
   val vc = UInt(log2Ceil(params.numVCs).W)  // 虚拟通道ID
-  val destId = UInt(log2Ceil(params.numSMClusters.max(params.numL2Slices)).W)  // 目标ID
-  
-  // 数据负载 (48 bits)
-  val data = UInt(48.W)
-  
-  // 总位宽：2 + 1 + log2(numVCs) + log2(max(destId)) + 48 = 64 bits
+  // 目标ID的位宽应覆盖所有可能的目的节点（SMs 或 L2切片）
+  private val destWidth = log2Ceil(params.numSMs.max(params.numL2Slices))
+  val destId = UInt(destWidth.W)      // 目标ID
+
+  // 数据负载：根据参数 `flitWidth` 计算，可调整以匹配整体flit位宽
+  private val headerWidth = 2 + 1 + log2Ceil(params.numVCs) + destWidth
+  private val dataWidth = Math.max(1, params.flitWidth - headerWidth)
+  val data = UInt(dataWidth.W)
   
   // 辅助方法
   def isRequest: Bool = flitType === FlitType.REQUEST
@@ -37,8 +39,9 @@ class NoCInterface(params: NoCParams) extends Bundle {
   val flit = Decoupled(new Flit(params))
   
   // 信用信号（用于流量控制）
-  val creditIn = Input(UInt(params.creditWidth.W))   // 从下游接收的信用
-  val creditOut = Output(UInt(params.creditWidth.W)) // 向上游发送的信用
+  // 为每个虚拟通道维护独立的信用信号
+  val creditIn = Input(Vec(params.numVCs, UInt(params.creditWidth.W)))   // 从下游接收的每个VC的信用
+  val creditOut = Output(Vec(params.numVCs, UInt(params.creditWidth.W))) // 向上游发送的每个VC的信用
   
   // 辅助构造函数
   def this() = this(DefaultNoCParams)

@@ -28,8 +28,8 @@ class TestSM(params: NoCParams) extends Module {
   io.flit.valid := valid
   
   // 信用信号（简化处理）
-  io.creditIn := params.bufferDepth.U
-  io.creditOut := DontCare
+  // 测试模块作为源，向上游发送初始信用
+  io.creditOut := VecInit.fill(params.numVCs)(params.bufferDepth.U)
   
   // 状态机
   val sIdle :: sSend :: sWait :: Nil = Enum(3)
@@ -74,9 +74,8 @@ class TestL2Slice(params: NoCParams) extends Module {
     receivedValid := true.B
   }
   
-  // 信用信号（简化处理）
-  io.creditIn := DontCare
-  io.creditOut := params.bufferDepth.U
+  // 对于 L2（Flipped 接口），驱动 creditIn（向上游发送信用），保持 creditOut 为输入由上游提供
+  io.creditIn := VecInit.fill(params.numVCs)(params.bufferDepth.U)
 }
 
 // 简化的NoC测试模块（用于快速验证）

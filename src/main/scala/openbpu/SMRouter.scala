@@ -25,7 +25,8 @@ class SMRouter(params: NoCParams) extends Module {
     inputBuffers(i).io.in <> io.in(i).flit
     
     // 连接信用信号
-    inputBuffers(i).io.creditIn := VecInit.fill(params.numVCs)(io.in(i).creditOut)
+    // 现在接口为 per-VC credit Vec，可以直接映射
+    inputBuffers(i).io.creditIn := io.in(i).creditOut
     io.in(i).creditIn := inputBuffers(i).io.creditOut
   }
   
@@ -48,6 +49,15 @@ class SMRouter(params: NoCParams) extends Module {
     RegInit(0.U.asTypeOf(new Flit(params)))
   ))
   val rcInputValids = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(RegInit(false.B)))
+
+  // VA 输入寄存器（由 RC->VA 的 dequeue 填充）
+  val vaInputPortRegs = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(
+    RegInit(0.U(log2Ceil(params.numSMRouterPortsOut).W))
+  ))
+  val vaInputVCRegs = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(
+    RegInit(0.U(log2Ceil(params.numVCs).W))
+  ))
+  val vaInputValids = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(RegInit(false.B)))
   
   // 为输入缓冲器输出提供ready信号
   for (i <- 0 until params.numSMRouterPortsIn) {
@@ -86,69 +96,57 @@ class SMRouter(params: NoCParams) extends Module {
     val selectedFlit = Mux1H(Seq.tabulate(params.numVCs) { vc =>
       (selectedVC === vc.U) -> rcInputFlits(i)(vc)
     })
-    
-    rc.io.in(i).flit := selectedFlit
+
+    // RC 输入现在是 Decoupled(new Flit), 填充 bits/valid
+    rc.io.in(i).bits := selectedFlit
     rc.io.in(i).valid := hasValidFlit
-    rc.io.out(i).ready := true.B // 简化：假设RC输出始终就绪
+
+    // 当 RC 接收到 flit 时，将路由结果和 flit 入队到 rcOutQueues（见下方定义）
+    // 这里先占位，实际 rcOutQueues 在循环外定义
+    // rcOutQueues(i).io.enq.bits.flit := selectedFlit
+    // rcOutQueues(i).io.enq.bits.outPort := rc.io.out(i).port
+    // rcOutQueues(i).io.enq.bits.inVC := selectedVC
+    // rcOutQueues(i).io.enq.valid := rc.io.in(i).fire
+  }
+
+  // 使用队列替代 RC->VA 的 RegNext，以提供弹性和反压
+  val rcOutQueues = Seq.tabulate(params.numSMRouterPortsIn) { i =>
+    Module(new Queue(new RCToVABundle(params, params.numSMRouterPortsOut), 2))
+  }
+
+  // 将 RC 的输出组合入队（放在单独循环中以避免在上方循环里引用未定义的 rcOutQueues）
+  for (i <- 0 until params.numSMRouterPortsIn) {
+    val vcValids = VecInit.tabulate(params.numVCs)(vc => rcInputValids(i)(vc))
+    val hasValidFlit = vcValids.asUInt.orR
+    val selectedVC = Mux(hasValidFlit, PriorityEncoder(vcValids.asUInt), 0.U)
+    val selectedFlit = Mux1H(Seq.tabulate(params.numVCs) { vc => (selectedVC === vc.U) -> rcInputFlits(i)(vc) })
+
+    rcOutQueues(i).io.enq.bits.flit := selectedFlit
+    rcOutQueues(i).io.enq.bits.outPort := rc.io.out(i).port
+    rcOutQueues(i).io.enq.bits.inVC := selectedVC
+    rcOutQueues(i).io.enq.valid := rc.io.in(i).fire
+    rc.io.out(i).ready := rcOutQueues(i).io.enq.ready
   }
   
-  // RC阶段输出：每个输入端口的输出端口号和VC号
-  val rcOutPorts = RegNext(VecInit.tabulate(params.numSMRouterPortsIn)(i => rc.io.out(i).port))
-  val rcOutVCs = RegNext(VecInit.tabulate(params.numSMRouterPortsIn)(i => rc.io.out(i).vc))
-  val rcOutValids = RegNext(VecInit.tabulate(params.numSMRouterPortsIn)(i => rc.io.in(i).valid))
-  
-  // ===========================================================================
-  // 流水线寄存器：RC → VA
-  // ===========================================================================
-  val vaInputPortRegs = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(
-    RegInit(0.U(log2Ceil(params.numSMRouterPortsOut).W))
-  ))
-  val vaInputVCRegs = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(
-    RegInit(0.U(log2Ceil(params.numVCs).W))
-  ))
-  val vaInputValids = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(RegInit(false.B)))
-  
-  // 连接RC输出到VA输入寄存器
+  // 将 RC 输出队列的项 dequeue 到 VA 输入寄存器（通过匹配 inVC）
   for (i <- 0 until params.numSMRouterPortsIn) {
+    val deqReady = WireInit(false.B)
     for (vc <- 0 until params.numVCs) {
-      when (rcOutValids(i) && (rcOutVCs(i) === vc.U)) {
-        vaInputPortRegs(i)(vc) := rcOutPorts(i)
-        vaInputVCRegs(i)(vc) := rcOutVCs(i)
+      val headMatch = rcOutQueues(i).io.deq.valid && (rcOutQueues(i).io.deq.bits.inVC === vc.U)
+      when (headMatch) {
+        vaInputPortRegs(i)(vc) := rcOutQueues(i).io.deq.bits.outPort
+        vaInputVCRegs(i)(vc) := rcOutQueues(i).io.deq.bits.inVC
         vaInputValids(i)(vc) := true.B
+        deqReady := true.B
       } .otherwise {
         vaInputValids(i)(vc) := false.B
       }
     }
+    rcOutQueues(i).io.deq.ready := deqReady
   }
-  
-  // ===========================================================================
-  // 3. VA: VC Allocation - 虚拟通道分配阶段
-  // ===========================================================================
-  // 创建VC分配模块
-  val va = Module(new VCAllocator(params, params.numSMRouterPortsIn))
-  
-  // 连接VA输入
-  for (i <- 0 until params.numSMRouterPortsIn) {
-    for (vc <- 0 until params.numVCs) {
-      // 为每个输入VC请求所有可能的输出VC
-      for (outVC <- 0 until params.numVCs) {
-        va.io.req(i)(vc)(outVC).valid := vaInputValids(i)(vc) && (vaInputVCRegs(i)(vc) === outVC.U)
-      }
-    }
-  }
-  
-  // VA阶段输出：VC分配授权
-  val vaOutGrants = Seq.tabulate(params.numSMRouterPortsIn) { i =>
-    Seq.tabulate(params.numVCs) { vc =>
-      Seq.tabulate(params.numVCs) { outVC =>
-        RegNext(va.io.grant(i)(vc)(outVC).grant)
-      }
-    }
-  }
-  
-  // ===========================================================================
+
+  // ========== VA -> SA 的 dequeue 到 SA 寄存器 ==========
   // 流水线寄存器：VA → SA
-  // ===========================================================================
   val saInputPortRegs = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(
     RegInit(0.U(log2Ceil(params.numSMRouterPortsOut).W))
   ))
@@ -156,29 +154,73 @@ class SMRouter(params: NoCParams) extends Module {
     RegInit(0.U(log2Ceil(params.numVCs).W))
   ))
   val saInputValids = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(RegInit(false.B)))
-  
-  // 连接VA输出到SA输入寄存器
+
+  // 为 VA -> SA 准备的输出队列（在稍后由 VA 阶段入队）
+  val vaOutQueues = Seq.tabulate(params.numSMRouterPortsIn) { i =>
+    Module(new Queue(new VAToSABundle(params, params.numSMRouterPortsOut), 2))
+  }
   for (i <- 0 until params.numSMRouterPortsIn) {
+    val deqReady = WireInit(false.B)
     for (vc <- 0 until params.numVCs) {
-      // 检查是否获得VC授权
-      val vcGranted = vaOutGrants(i)(vc)(vc)
-      
-      when (vcGranted) {
-        saInputPortRegs(i)(vc) := vaInputPortRegs(i)(vc)
-        saInputVCRegs(i)(vc) := vaInputVCRegs(i)(vc)
+      val headMatch = vaOutQueues(i).io.deq.valid && (vaOutQueues(i).io.deq.bits.inVC === vc.U)
+      when (headMatch) {
+        saInputPortRegs(i)(vc) := vaOutQueues(i).io.deq.bits.outPort
+        saInputVCRegs(i)(vc) := vaOutQueues(i).io.deq.bits.outVC
         saInputValids(i)(vc) := true.B
+        deqReady := true.B
       } .otherwise {
         saInputValids(i)(vc) := false.B
       }
     }
+    vaOutQueues(i).io.deq.ready := deqReady
   }
   
   // ===========================================================================
-  // 4. SA: Switch Allocation - 开关分配阶段
+  // 3. VA: VC Allocation - 虚拟通道分配阶段
   // ===========================================================================
+  // 创建VC分配模块
+  val va = Module(new VCAllocator(params, params.numSMRouterPortsIn))
+
+  // 连接VA输入：当输入有效时，向所有输出VC发出请求，由分配器在输出VC之间选择
+  for (i <- 0 until params.numSMRouterPortsIn) {
+    for (vc <- 0 until params.numVCs) {
+      for (outVC <- 0 until params.numVCs) {
+        va.io.req(i)(vc)(outVC).valid := vaInputValids(i)(vc)
+      }
+    }
+  }
+
+  // 将 VA 的授权（多个 inputVC 中的优先项）打包并入队
+  for (i <- 0 until params.numSMRouterPortsIn) {
+    // 计算每个输入 VC 是否有任何对某输出 VC 的授权
+    val anyGrantPerInVC = VecInit.tabulate(params.numVCs) { vc =>
+      val grants = VecInit.tabulate(params.numVCs) { outVC => va.io.grant(i)(vc)(outVC).grant }
+      grants.asUInt.orR
+    }
+
+    val anyGrant = anyGrantPerInVC.asUInt.orR
+    val selInVC = PriorityEncoder(anyGrantPerInVC.asUInt)
+
+    val selOutPerInVC = VecInit.tabulate(params.numVCs) { vc =>
+      val grants = VecInit.tabulate(params.numVCs) { outVC => va.io.grant(i)(vc)(outVC).grant }
+      PriorityEncoder(grants.asUInt)
+    }
+
+    val outPortSel = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> vaInputPortRegs(i)(vc) })
+    val outVCSel = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> selOutPerInVC(vc) })
+
+    vaOutQueues(i).io.enq.bits.outPort := outPortSel
+    vaOutQueues(i).io.enq.bits.inVC := selInVC
+    vaOutQueues(i).io.enq.bits.outVC := outVCSel
+    vaOutQueues(i).io.enq.valid := anyGrant
+  }
+
+  
+  // ===========================================================================
+  // 4. SA: Switch Allocation - 开关分配阶段
   // 创建路由器仲裁器
   val arbiter = Module(new RouterArbiter(params, params.numSMRouterPortsIn, params.numSMRouterPortsOut))
-  
+
   // 连接SA输入
   for (i <- 0 until params.numSMRouterPortsIn) {
     for (vc <- 0 until params.numVCs) {
@@ -189,41 +231,58 @@ class SMRouter(params: NoCParams) extends Module {
     }
   }
   
-  // ===========================================================================
-  // 流水线寄存器：SA → ST
-  // ===========================================================================
-  // ST阶段需要的Flit数据和授权信号
-  val stInputFlits = Seq.tabulate(params.numSMRouterPortsIn) { i =>
-    Seq.tabulate(params.numVCs) { vc =>
-      RegNext(rcInputFlits(i)(vc))
-    }
-  }
-  val stInputValids = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(RegInit(false.B)))
   
-  // 连接SA输出到ST输入
-  for (i <- 0 until params.numSMRouterPortsIn) {
-    for (vc <- 0 until params.numVCs) {
-      // 检查是否获得开关授权
-      val port = saInputPortRegs(i)(vc)
-      val saGranted = arbiter.io.gnt(i)(port)(vc)
-      
-      stInputValids(i)(vc) := saInputValids(i)(vc) && saGranted
-    }
-  }
   
   // ===========================================================================
   // 5. ST: Switch Traversal - 切换遍历阶段
   // ===========================================================================
-  // 创建路由器输出Mux
-  val outputMux = Module(new RouterOutputMux(params, params.numSMRouterPortsIn, params.numSMRouterPortsOut))
-  
-  // 连接ST输入到输出Mux
+  // SA -> ST 队列化：将获得开关授权的 flit 排队传递到 ST
+  val saOutQueues = Seq.tabulate(params.numSMRouterPortsIn) { i =>
+    Module(new Queue(new SAToSTBundle(params, params.numSMRouterPortsOut), 2))
+  }
+
+  // 将 SA 授权的 flit 入队到 saOutQueues
   for (i <- 0 until params.numSMRouterPortsIn) {
-    for (vc <- 0 until params.numVCs) {
-      outputMux.io.in(i)(vc).bits := stInputFlits(i)(vc)
-      outputMux.io.in(i)(vc).valid := stInputValids(i)(vc)
-      // ready信号由RouterOutputMux内部驱动，不需要外部赋值
+    val grantVec = VecInit.tabulate(params.numVCs) { vc =>
+      val perPortMatches = VecInit.tabulate(params.numSMRouterPortsOut) { port =>
+        (saInputPortRegs(i)(vc) === port.U) && arbiter.io.gnt(i)(port)(vc)
+      }
+      perPortMatches.asUInt.orR && saInputValids(i)(vc)
     }
+
+    val anyGrant = grantVec.asUInt.orR
+    val selInVC = PriorityEncoder(grantVec.asUInt)
+
+    val selFlit = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> rcInputFlits(i)(vc) })
+    val selOutPort = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> saInputPortRegs(i)(vc) })
+    val selOutVC = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> saInputVCRegs(i)(vc) })
+
+    saOutQueues(i).io.enq.bits.flit := selFlit
+    saOutQueues(i).io.enq.bits.outPort := selOutPort
+    saOutQueues(i).io.enq.bits.inVC := selInVC
+    saOutQueues(i).io.enq.bits.outVC := selOutVC
+    saOutQueues(i).io.enq.valid := anyGrant
+  }
+
+  // 创建路由器输出 Mux
+  val outputMux = Module(new RouterOutputMux(params, params.numSMRouterPortsIn, params.numSMRouterPortsOut))
+
+  // 连接ST输入到输出Mux：从 saOutQueues dequeue 的项填充到对应的 inputVC channel
+  for (i <- 0 until params.numSMRouterPortsIn) {
+    val deq = saOutQueues(i).io.deq
+    val dqValid = deq.valid
+    val dqFlit = deq.bits.flit
+    val dqInVC = deq.bits.inVC
+
+    for (vc <- 0 until params.numVCs) {
+      // 将 dequeued 的 flit 路由到对应的 in(i)(vc)
+      outputMux.io.in(i)(vc).bits := Mux1H(Seq.tabulate(params.numVCs) { k => (dqInVC === k.U) -> dqFlit })
+      outputMux.io.in(i)(vc).valid := dqValid && (dqInVC === vc.U)
+    }
+
+    // 根据 outputMux 对应通道的 ready 决定是否 dequeue
+    val readyForDequeued = Mux1H(Seq.tabulate(params.numVCs) { k => (dqInVC === k.U) -> outputMux.io.in(i)(k).ready })
+    saOutQueues(i).io.deq.ready := readyForDequeued
   }
   
   // 连接仲裁器选择信号到输出Mux
@@ -236,34 +295,21 @@ class SMRouter(params: NoCParams) extends Module {
     }
   }
   
-  // ===========================================================================
-  // 流水线寄存器：ST → LT
-  // ===========================================================================
-  val ltInputFlits = Seq.tabulate(params.numSMRouterPortsOut) {
-    port => Seq.tabulate(params.numVCs) {
-      vc => RegNext(outputMux.io.out(port)(vc).bits)
+  // ==========================================================================
+  // ST -> LT 队列化：为每个 output port/VC 插入短队列
+  // ==========================================================================
+  val stToLtQueues = Seq.tabulate(params.numSMRouterPortsOut) { port =>
+    Seq.tabulate(params.numVCs) { vc =>
+      Module(new Queue(new Flit(params), 2))
     }
   }
-  val ltInputValids = Seq.tabulate(params.numSMRouterPortsOut) {
-    port => Seq.tabulate(params.numVCs) {
-      vc => RegNext(outputMux.io.out(port)(vc).valid)
-    }
-  }
-  val ltInputReadys = Seq.tabulate(params.numSMRouterPortsOut) {
-    port => Seq.tabulate(params.numVCs) {
-      vc => Wire(Bool())
-    }
-  }
-  // 连接ready信号的流水线寄存器
-  val ltInputReadyRegs = Seq.tabulate(params.numSMRouterPortsOut) {
-    port => Seq.tabulate(params.numVCs) {
-      vc => RegNext(ltInputReadys(port)(vc))
-    }
-  }
-  // 将ready信号反馈到outputMux
+
+  // 将 outputMux 的 out 端直接入队到 stToLtQueues
   for (port <- 0 until params.numSMRouterPortsOut) {
     for (vc <- 0 until params.numVCs) {
-      outputMux.io.out(port)(vc).ready := ltInputReadyRegs(port)(vc)
+      stToLtQueues(port)(vc).io.enq.bits := outputMux.io.out(port)(vc).bits
+      stToLtQueues(port)(vc).io.enq.valid := outputMux.io.out(port)(vc).valid
+      outputMux.io.out(port)(vc).ready := stToLtQueues(port)(vc).io.enq.ready
     }
   }
   
@@ -276,9 +322,9 @@ class SMRouter(params: NoCParams) extends Module {
   // 连接输出Mux到虚拟通道合并模块
   for (port <- 0 until params.numSMRouterPortsOut) {
     for (vc <- 0 until params.numVCs) {
-      vcMergers(port).io.in(vc).bits := ltInputFlits(port)(vc)
-      vcMergers(port).io.in(vc).valid := ltInputValids(port)(vc)
-      ltInputReadys(port)(vc) := vcMergers(port).io.in(vc).ready
+      vcMergers(port).io.in(vc).bits := stToLtQueues(port)(vc).io.deq.bits
+      vcMergers(port).io.in(vc).valid := stToLtQueues(port)(vc).io.deq.valid
+      stToLtQueues(port)(vc).io.deq.ready := vcMergers(port).io.in(vc).ready
     }
   }
   
@@ -303,8 +349,8 @@ class SMRouter(params: NoCParams) extends Module {
   
   // 信用信号处理（输出端口到下游的信用）
   for (port <- 0 until params.numSMRouterPortsOut) {
-    // 简化：使用固定信用值
-    io.out(port).creditOut := params.bufferDepth.U
+    // 初始化每个输出端口的每个VC信用为缓冲深度
+    io.out(port).creditOut := VecInit.fill(params.numVCs)(params.bufferDepth.U)
   }
 }
 

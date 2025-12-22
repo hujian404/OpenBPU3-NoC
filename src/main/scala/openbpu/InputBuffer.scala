@@ -20,27 +20,27 @@ class InputBuffer(params: NoCParams) extends Module {
   // FIFO队列
   val fifo = Module(new Queue(new Flit(params), params.bufferDepth))
   
-  // 信用计数
-  val creditCounter = RegInit(params.bufferDepth.U(params.creditWidth.W))
-  
-  // 信用更新逻辑
-  when (io.creditIn =/= 0.U) {
-    creditCounter := creditCounter + io.creditIn
-  }
-  
-  when (io.in.fire) {
-    creditCounter := creditCounter - 1.U
-  }
-  
-  // FIFO接口连接
-  fifo.io.enq <> io.in
+  // 信用计数：表示当前可用的接收缓冲数
+  // 初始为0，需要下游通过 creditIn 提供初始可用缓冲数
+  val creditCounter = RegInit(0.U(params.creditWidth.W))
+
+  // 明确连接FIFO的enq接口，避免 <> 带来的重复驱动
+  fifo.io.enq.bits := io.in.bits
+  // 只有在有可用信用时才允许入队
+  fifo.io.enq.valid := io.in.valid && (creditCounter > 0.U)
+  io.in.ready := fifo.io.enq.ready && (creditCounter > 0.U)
+
+  // 下游连接
   io.out <> fifo.io.deq
-  
-  // 向上游发送可用信用
+
+  // 信用更新：从下游接收到的creditIn（释放的缓冲数）加入计数；当成功接收一个flit（io.in.fire）时扣减1
+  val recvFlit = io.in.fire
+  val creditFromDown = io.creditIn
+  val creditNext = creditCounter + creditFromDown - Mux(recvFlit, 1.U, 0.U)
+  creditCounter := creditNext
+
+  // 向上游汇报当前可用信用
   io.creditOut := creditCounter
-  
-  // 确保FIFO不溢出（通过信用控制）
-  io.in.ready := creditCounter > 0.U
 }
 
 // 虚拟通道输入缓冲器数组
@@ -52,9 +52,9 @@ class VCInputBuffer(params: NoCParams) extends Module {
     // 下游接口（按VC分开）
     val out = Vec(params.numVCs, Decoupled(new Flit(params)))
     
-    // 信用信号
+    // 信用信号：每个VC独立的信用输出（向上游）
     val creditIn = Input(Vec(params.numVCs, UInt(params.creditWidth.W)))
-    val creditOut = Output(UInt(params.creditWidth.W))
+    val creditOut = Output(Vec(params.numVCs, UInt(params.creditWidth.W)))
   })
   
   // 创建多个虚拟通道的输入缓冲器
@@ -80,14 +80,12 @@ class VCInputBuffer(params: NoCParams) extends Module {
   
   io.in.ready := hasAvailableVC
   
-  // 连接下游接口
+  // 连接下游接口并逐VC传递信用
   for (i <- 0 until params.numVCs) {
     io.out(i) <> buffers(i).io.out
     buffers(i).io.creditIn := io.creditIn(i)
+    io.creditOut(i) := buffers(i).io.creditOut
   }
-  
-  // 信用输出（聚合所有VC的信用）
-  io.creditOut := buffers.map(_.io.creditOut).reduce(_ + _)
   
   // 更新VC选择器
   when (io.in.fire) {
