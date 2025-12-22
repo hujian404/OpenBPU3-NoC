@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# IntelliJ / IDEA
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# SBT / Scala / Mill
+target/
+**/target/
+streams/
+project/target/
+project/project/
+mill/target/
+task-temp-directory/
+.bloop/
+
+# Build / IDE
+*.class
+*.log
+*.tmp
+
+# Other
+node_modules/
+*.swp
