@@ -31,9 +31,17 @@ class CreditFlowSpec extends AnyFlatSpec with ChiselScalatestTester with Matcher
 
       dut.clock.step(1)
 
-      // 观察NoC是否阻止该flit进入（即sm端的ready应为 false）
-      val ready = dut.io.sm(0).flit.ready.peek().litToBoolean
-      assert(!ready, "SM side should not be ready when downstream credit is zero")
+      // 在新的实现中，SM 端 ready 由本地 InputBuffer creditCounter 和管线空闲共同决定。
+      // 初始 creditCounter = bufferDepth，本地仍可接受若干 flit，但这些 flit 不会越过出口因为下游 creditIn=0。
+      // 因此这里不再强制 ready==false，而是检查“L2 在缺乏信用时不会看到 flit”。
+      var seenAtL2 = false
+      for (_ <- 0 until 10) {
+        if (dut.io.l2(0).flit.valid.peek().litToBoolean) {
+          seenAtL2 = true
+        }
+        dut.clock.step(1)
+      }
+      assert(!seenAtL2, "L2 should not observe flits when its creditIn is zero")
     }
   }
 }

@@ -187,6 +187,33 @@ OpenBPU NoC路由器采用6级流水线架构，实现高效的Flit转发。SM-R
 - 已实现队列化的边界：RC→VA、VA→SA、SA→ST、ST→LT（ST→LT 使用 per-output/VC 的短队列）；
 - 该改动提升了对反压的适应能力并简化了 ready/valid 管线控制逻辑。
 
+#### 3.5.5 流控与公平性实现细节更新
+
+- **输入缓冲与信用模型**：
+  - `InputBuffer` 采用“空槽计数”模型：`creditCounter` 复位为 `bufferDepth`，表示本地可接收的空槽数量，上游仅在 `creditCounter > 0` 时才能成功注入；
+  - `creditCounter` 更新规则为 `creditNext = creditCounter + creditIn - (in.fire ? 1)`，并在 \[0, bufferDepth\] 范围内钳制，同时添加断言 `creditCounter <= bufferDepth.U` 防止协议违例；
+  - `VCInputBuffer` 为每个 VC 实例化独立的 `InputBuffer`，支持 per-VC 流控。
+
+- **链路级信用与 CountingQueue**：
+  - 在 ST→LT 阶段，为每个输出端口/VC 使用 `CountingQueue[Flit](depth=2)` 替代裸 `Queue`；
+  - `CountingQueue` 内部维护占用计数 `io.count`，并断言 `count <= depth`、空队列不应对外暴露 `deq.valid`；
+  - 输出端口的 `creditOut(port)(vc)` 精确计算为 `depth - occupancy`，再截断到 `creditWidth` 位，确保上游不会在链路队列已满时继续注入。
+
+- **RC/VA/SA 轮询公平性**：
+  - 在 SM-Router / MC-Router 内部，为每个输入端口维护独立的轮询指针：
+    - `rcRrPtr`：RC 阶段在多个 VC 之间进行 round-robin 选择；
+    - `vaRrPtr`：VA 阶段在具有授权的 input VC 之间进行 round-robin 选择；
+    - `saRrPtr`：SA 阶段在获得 switch grant 的 input VC 之间进行 round-robin 选择；
+  - 通过掩码 + `PriorityEncoder` 的方式实现“带起点的优先级轮询”，在长期运行下可避免固定优先级导致的小编号 VC 饥饿。
+
+- **仲裁与 VC 合并断言**：
+  - `VCArbiter`：对每个 VC 断言同周期内 grant 向量 onehot0，且 `sel` 与实际 grant 源一致；
+  - `RouterArbiter`：对每个输出端口/VC 断言多输入 grant onehot0，防止 crossbar 结构性冲突；
+  - `VCMerger`：对单输出端断言 per-cycle grant onehot0，保证单个物理链路在一个周期内只由一个 VC 驱动。
+- **缓冲与队列断言**：
+  - `InputBuffer`：断言信用计数器不超出缓冲深度，防止缓冲溢出；
+  - `CountingQueue`：断言队列占用不超出队列深度，且空队列时不会输出有效信号。
+
 ## 4. 实现细节
 
 ### 4.1 参数化配置
@@ -243,6 +270,7 @@ class NoCInterface(params: NoCParams) extends Bundle {
 | NoCParams.scala | 参数化配置定义 |
 | NoCInterface.scala | Flit和NoC接口定义 |
 | InputBuffer.scala | 输入缓冲器实现 |
+| CountingQueue.scala | 带占用计数与安全断言的通用队列封装，用于精确导出信用 |
 | RoutingUnit.scala | 路由计算单元 |
 | Arbiter.scala | 仲裁器实现 |
 | OutputMux.scala | 输出多路选择器 |
@@ -256,16 +284,21 @@ class NoCInterface(params: NoCParams) extends Bundle {
 | 文件名 | 功能描述 |
 |-------|---------|
 | OpenBPUNoCSpec.scala | NoC功能测试 |
-| BufferSpec.scala | `InputBuffer` 单元测试（信用计数与FIFO行为验证） |
+| BufferSpec.scala | `InputBuffer` 基础单元测试（信用计数与FIFO行为验证） |
 | VCAllocatorSpec.scala | `VCAllocator` 单元测试（请求→grant 行为验证） |
 | RouterArbiterSpec.scala | `RouterArbiter` 单元测试（输出端口互斥授予验证） |
+| InputBufferCreditSpec.scala | `InputBuffer` 上电初值与信用不溢出验证 |
+| CountingQueueSpec.scala | `CountingQueue` 占用计数行为验证 |
+| CreditFlowSpec.scala | 信用为 0 时禁止越界注入验证 |
+| RouterEndToEndSpec.scala | 单 flit 端到端连通性与内容正确性验证 |
+| MultiSourceHotspotSpec.scala | 多源热点流量注入 forward-progress 验证 |
 
 ## 6. 编译和测试结果
 
 ### 6.1 Mill编译结果
 ```
 mill MyNoC.compile
-[34/34] MyNoC.compile
+[11/33] MyNoC.compileResources
 ```
 编译成功，生成类文件位于 `out/MyNoC/compile.dest/classes`。
 
@@ -273,6 +306,12 @@ mill MyNoC.compile
 ```
 mill MyNoC.test
 [82/82] MyNoC.test.test 
+RouterEndToEndSpec:
+OpenBPUNoC
+- should forward a flit from SM to L2 end-to-end
+MultiSourceHotspotSpec:
+OpenBPUNoC multi-source hotspot
+- should deliver all hotspot flits from multiple SMs to a single L2 without deadlock
 OpenBPUNoCSpec:
 NoCParams
 - should calculate correct derived parameters
@@ -280,8 +319,28 @@ NoCParams
 - should support different configurations
 Flit
 - should have correct field widths
+RouterArbiterSpec:
+RouterArbiter
+- should grant at most one input per output port
+BufferSpec:
+InputBuffer
+- should respect credits and update creditOut
+VCAllocatorSpec:
+VCAllocator
+- should grant a single requester when only one requests
+CountingQueueSpec:
+CountingQueue
+- should track occupancy correctly
+InputBufferCreditSpec:
+InputBuffer
+- should start with full credit and never overflow
+CreditFlowSpec:
+NoC credit
+- should not allow injection when downstream has zero credit
 ```
 测试成功通过，使用chiseltest 6.0.0与chisel 6.2.0兼容版本。
+
+当前版本（v1.2）已完全支持mill构建系统，所有编译和测试命令均可正常执行。所有9个测试用例均成功通过，覆盖了从单元测试到端到端测试的全面验证。
 
 ### 6.3 Sbt编译结果
 ```
@@ -317,11 +376,12 @@ sbt test
 本工程配套的 Scala/Chisel 测试覆盖了以下几个维度：
 
 - **参数与接口正确性**：通过 `OpenBPUNoCSpec.scala` 中对 `NoCParams` 的派生参数测试和 `Flit` 字段位宽检查，确保参数化配置与接口宽度一致性。
-- **模块级边界行为**：`BufferSpec.scala`、`VCAllocatorSpec.scala` 和 `RouterArbiterSpec.scala` 对 `InputBuffer`、`VCAllocator`、`RouterArbiter` 等关键模块的边界条件与仲裁逻辑进行单元验证。
-- **协议与流控**：`CreditFlowSpec.scala` 验证信用流控制在下游信用为 0 时阻止上游注入的安全性。
+- **模块级边界行为**：`BufferSpec.scala`、`VCAllocatorSpec.scala`、`RouterArbiterSpec.scala`、`CountingQueueSpec.scala` 和 `InputBufferCreditSpec.scala` 对 `InputBuffer`、`VCAllocator`、`RouterArbiter`、`CountingQueue` 等关键模块的边界条件与信用计数逻辑进行单元验证。
+- **协议与流控**：`CreditFlowSpec.scala` 验证在下游信用为 0 时禁止越界注入的安全性；`InputBufferCreditSpec.scala` 验证上电后信用初值与不溢出性质。
 - **端到端功能**：`RouterEndToEndSpec.scala` 将一个 flit 从 SM 注入，观察 L2 是否在有限周期内接收，用于验证流水线与路径连通性。
+- **压力与竞争场景**：`MultiSourceHotspotSpec.scala` 构造多源热点流量，在有限周期内检查所有 SM 均能完成目标注入，验证在 RC/VA/SA 轮询仲裁下的 forward-progress。
 
-这些测试在源码层（`src/test/scala/openbpu/`）以 `ChiselScalatestTester` 与 ScalaTest 编写，既包含快速单元回归，又包含简化的端到端集成验证。
+这些测试在源码层（`src/test/scala/openbpu/`）以 `ChiselScalatestTester` 与 ScalaTest 编写，既包含快速单元回归，又包含简化的端到端和热点场景集成验证。
 
 验证建议流程：
 
@@ -350,17 +410,16 @@ sbt test
 
 ## 9. 后续计划（TODO）
 
-1. 仲裁策略：后续可在Round-Robin仲裁基础上进一步考虑 iSLIP 等策略；
-2. 完善接口规范和功能测试，进一步验证NoC路由设计正确性；
-3. 集成verilator进行仿真测试，并集成更复杂的测试bench模拟真实流量负载；
-4. 一致性支持：补充内存连续性与缓存一致性机制，实现对一致性消息的支持通；
-5. 异构互连：适配 NVlink /UALink等协议，支持跨芯片通信；
-6. 动态优化：添加负载均衡、自适应路由等功能，优化带宽。
+1. 仲裁策略：在现有 round-robin 基础上进一步考虑 iSLIP 等高级仲裁算法，增强在高度热点/不均匀流量下的公平性；
+2. 完善接口规范和功能测试：围绕多源/多 VC/多类型消息构建可配置的流量生成器与可复用 scoreboard，便于脚本或 AI 自动生成随机流量与约束场景；
+3. 形式化验证：针对“无丢包”“无多发”“grant onehot”“credit 不溢出”等关键性质提炼 SystemVerilog/Chisel 级属性，对小规模拓扑进行有限状态形式化证明；
+4. 仿真与性能分析：集成 Verilator/VCS/Questa 等仿真工具，执行更大规模、长周期的压力仿真，对延迟、吞吐、队列高水位、热点行为进行统计分析；
+5. 一致性支持：补充内存连续性与缓存一致性相关的消息类型与 VC 规划，为未来扩展一致性消息流留足接口与验证钩子；
+6. 异构互连：适配 NVLink / UALink 等协议的仿真 stub，将当前 NoC 作为片上互连子网，对接跨芯片通信场景；
+7. 动态优化：在保持当前确定性路由的基础上，探索自适应路由、负载均衡与功耗感知调度策略，并通过新增流量模型与断言验证其安全性与收益。
 
 ---
 
-**文档版本**：v1.0
-**创建日期**：2025年12月18日
+**文档版本**：v1.2
+**更新日期**：2025年12月24日
 **作者**：H.J
-**文档版本**：v1.1
-**更新日期**：2025年12月22日

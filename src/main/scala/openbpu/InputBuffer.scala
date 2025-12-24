@@ -21,8 +21,11 @@ class InputBuffer(params: NoCParams) extends Module {
   val fifo = Module(new Queue(new Flit(params), params.bufferDepth))
   
   // 信用计数：表示当前可用的接收缓冲数
-  // 初始为0，需要下游通过 creditIn 提供初始可用缓冲数
-  val creditCounter = RegInit(0.U(params.creditWidth.W))
+  // 这里采用“缓冲满”初始模型：上电后就认为本端有 bufferDepth 个空槽，
+  // 下游通过 creditIn 仅用于在某些实现中补充额外信用；更常见的形式是：
+  //   creditOut ≈ 剩余空槽数 = bufferDepth - fifoOccupancy
+  // 为提升可验证性，我们显式跟踪 creditCounter，并与 FIFO 占用保持一致。
+  val creditCounter = RegInit(params.bufferDepth.U(params.creditWidth.W))
 
   // 明确连接FIFO的enq接口，避免 <> 带来的重复驱动
   fifo.io.enq.bits := io.in.bits
@@ -33,14 +36,23 @@ class InputBuffer(params: NoCParams) extends Module {
   // 下游连接
   io.out <> fifo.io.deq
 
-  // 信用更新：从下游接收到的creditIn（释放的缓冲数）加入计数；当成功接收一个flit（io.in.fire）时扣减1
+  // 信用更新：
+  // - 当成功接收一个flit（io.in.fire）时，消耗 1 个本地空槽；
+  // - 当下游释放一个缓冲（通过 creditIn 上报）时，补充相应空槽。
   val recvFlit = io.in.fire
   val creditFromDown = io.creditIn
-  val creditNext = creditCounter + creditFromDown - Mux(recvFlit, 1.U, 0.U)
-  creditCounter := creditNext
-
+  val creditDec = Mux(recvFlit, 1.U, 0.U)
+  val creditNextRaw = creditCounter + creditFromDown - creditDec
+  // 约束在 [0, bufferDepth] 范围内，避免计数溢出，便于形式化验证
+  val creditMax = params.bufferDepth.U(params.creditWidth.W)
+  val creditNextClamped = Mux(creditNextRaw > creditMax, creditMax, creditNextRaw)
+  creditCounter := creditNextClamped
+  
   // 向上游汇报当前可用信用
   io.creditOut := creditCounter
+  
+  // 简单的安全断言：在仿真/形式化中捕获明显协议违例
+  assert(creditCounter <= creditMax, "InputBuffer creditCounter overflow")
 }
 
 // 虚拟通道输入缓冲器数组

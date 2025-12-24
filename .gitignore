@@ -28,3 +28,6 @@ task-temp-directory/
 node_modules/
 *.swp
 .metals/
+generated/
+out/
+test_run_dir/

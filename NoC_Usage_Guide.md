@@ -44,36 +44,38 @@ mill MyNoC.compile
 ### 使用Mill运行测试
 
 ```bash
-# 运行测试
+# 运行所有测试
 mill MyNoC.test
 
-### 常见场景与示例命令
+# 若需要交互式运行（以便诊断），可以加 -i
+mill -i MyNoC.test
+```
+
+### 使用Sbt运行测试
+
+```bash
+# 运行所有测试
+ sbt test
+```
 
 ### 常见场景与示例命令
 
 - 只运行单个 ScalaTest 测试类（推荐用于快速回归）：
 
 ```bash
-# sbt - 选择性运行某个测试类或匹配模式
+# sbt - 选择性运行某个测试类或匹配模式（推荐方式）
 sbt "testOnly *BufferSpec"
 sbt "testOnly *RouterArbiterSpec"
 sbt "testOnly *VCAllocatorSpec"
 
-# mill - 通过 ScalaTest 的 `-z` 模式选择匹配的测试名（将参数传递给测试框架）
-mill MyNoC.test -- -z "BufferSpec"
-mill MyNoC.test -- -z "RouterArbiterSpec"
-mill MyNoC.test -- -z "VCAllocatorSpec"
+# sbt - 选择性运行匹配的测试名
+sbt "testOnly -- -z "BufferSpec""
+
+# mill - 当前版本中，由于 mill testrunner 的限制，无法直接将参数传递给 ScalaTest
+# 若需要运行单个测试类，请使用 sbt 命令
 ```
 
-> 注意：在部分 mill 版本或默认 testrunner 配置下，将 `--` 与后续 ScalaTest 参数一起从 mill CLI 转发到 ScalaTest 可能失败（错误示例："Argument unrecognized by ScalaTest's Runner: --"）。如果你遇到此错误，推荐使用 `sbt "testOnly *<SpecName>"` 进行选择性测试，或在 `build.sc` 中添加自定义 mill 测试目标以支持参数传递。
-
-- 在 `mill` 中运行完整测试套件（mill 不如 sbt 在 testOnly 选择上常用）：
-
-```bash
-mill MyNoC.test
-# 若需要交互式运行（以便诊断），可以加 -i
-mill -i MyNoC.test
-```
+> 注意：在当前 mill 版本中，`--` 分隔符无法正确将参数转发到 ScalaTest（会出现 "Argument unrecognized by ScalaTest's Runner: --" 错误）。推荐使用 `sbt "testOnly *<SpecName>"` 进行选择性测试。
 
 ### Troubleshooting（常见故障排查）
 
@@ -192,9 +194,7 @@ val params = NoCParams(
 
 ---
 
-**文档版本**：v1.0
-**创建日期**：2025年12月18日
+**文档版本**：v1.2
+**更新日期**：2025年12月24日
 **作者**：H.J
 
-**文档版本**：v1.1
-**更新日期**：2025年12月22日

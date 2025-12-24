@@ -49,11 +49,14 @@ class MCRouter(params: NoCParams) extends Module {
     RegInit(0.U.asTypeOf(new Flit(params)))
   ))
   val rcInputValids = Seq.fill(params.numMCRouterPortsIn)(Seq.fill(params.numVCs)(RegInit(false.B)))
+
+  // 每个输入端口的 RC 轮询指针
+  val rcRrPtr = Seq.fill(params.numMCRouterPortsIn)(RegInit(0.U(log2Ceil(params.numVCs).W)))
   
   // 为输入缓冲器输出提供ready信号
+  // 当前实现中，RC 输入寄存器始终可以接收新的 flit，具体反压主要依赖信用与后级队列。
   for (i <- 0 until params.numMCRouterPortsIn) {
     for (vc <- 0 until params.numVCs) {
-      // 简化：假设流水线始终准备好接收
       inputBuffers(i).io.out(vc).ready := true.B
     }
   }
@@ -78,19 +81,23 @@ class MCRouter(params: NoCParams) extends Module {
   
   // 连接RC输入
   for (i <- 0 until params.numMCRouterPortsIn) {
-    // 选择一个有效VC发送到RC
     val vcValids = VecInit.tabulate(params.numVCs)(vc => rcInputValids(i)(vc))
     val hasValidFlit = vcValids.asUInt.orR
-    val selectedVC = Mux(hasValidFlit, PriorityEncoder(vcValids.asUInt), 0.U)
+
+    val masked = VecInit.tabulate(params.numVCs)(k => vcValids(k) && (k.U >= rcRrPtr(i)))
+    val hasMasked = masked.asUInt.orR
+    val selectedVC = Mux(hasMasked, PriorityEncoder(masked.asUInt), PriorityEncoder(vcValids.asUInt))
     
-    // 使用Mux1H选择正确的Flit，因为Chisel不允许UInt作为数组索引
     val selectedFlit = Mux1H(Seq.tabulate(params.numVCs) { vc =>
       (selectedVC === vc.U) -> rcInputFlits(i)(vc)
     })
 
-    // RC 输入现在是 Decoupled(new Flit), 填充 bits/valid
     rc.io.in(i).bits := selectedFlit
     rc.io.in(i).valid := hasValidFlit
+
+    when (rc.io.in(i).fire) {
+      rcRrPtr(i) := Mux(selectedVC === (params.numVCs - 1).U, 0.U, selectedVC + 1.U)
+    }
     // RC 的 ready 由后续逻辑决定；不要在外部驱动 rc.io.in.ready（它是 RC 的输出）
   }
   
@@ -102,10 +109,12 @@ class MCRouter(params: NoCParams) extends Module {
 
     // 将 RC 的输出组合入队（放在单独循环中以避免在上方循环里引用未定义的 rcOutQueues）
     for (i <- 0 until params.numMCRouterPortsIn) {
-      val vcValids = VecInit.tabulate(params.numVCs)(vc => rcInputValids(i)(vc))
-      val hasValidFlit = vcValids.asUInt.orR
-      val selectedVC = Mux(hasValidFlit, PriorityEncoder(vcValids.asUInt), 0.U)
-      val selectedFlit = Mux1H(Seq.tabulate(params.numVCs) { vc => (selectedVC === vc.U) -> rcInputFlits(i)(vc) })
+    val vcValids = VecInit.tabulate(params.numVCs)(vc => rcInputValids(i)(vc))
+    val hasValidFlit = vcValids.asUInt.orR
+    val masked = VecInit.tabulate(params.numVCs)(k => vcValids(k) && (k.U >= rcRrPtr(i)))
+    val hasMasked = masked.asUInt.orR
+    val selectedVC = Mux(hasMasked, PriorityEncoder(masked.asUInt), PriorityEncoder(vcValids.asUInt))
+    val selectedFlit = Mux1H(Seq.tabulate(params.numVCs) { vc => (selectedVC === vc.U) -> rcInputFlits(i)(vc) })
 
       rcOutQueues(i).io.enq.bits.flit := selectedFlit
       rcOutQueues(i).io.enq.bits.outPort := rc.io.out(i).port
@@ -162,13 +171,18 @@ class MCRouter(params: NoCParams) extends Module {
     Module(new Queue(new VAToSABundle(params, params.numMCRouterPortsOut), 2))
   }
 
+  // VA 轮询指针
+  val vaRrPtr = Seq.fill(params.numMCRouterPortsIn)(RegInit(0.U(log2Ceil(params.numVCs).W)))
+
   for (i <- 0 until params.numMCRouterPortsIn) {
     val anyGrantPerInVC = VecInit.tabulate(params.numVCs) { vc =>
       val grants = VecInit.tabulate(params.numVCs) { outVC => va.io.grant(i)(vc)(outVC).grant }
       grants.asUInt.orR
     }
+    val masked = VecInit.tabulate(params.numVCs)(k => anyGrantPerInVC(k) && (k.U >= vaRrPtr(i)))
+    val hasMasked = masked.asUInt.orR
     val anyGrant = anyGrantPerInVC.asUInt.orR
-    val selInVC = PriorityEncoder(anyGrantPerInVC.asUInt)
+    val selInVC = Mux(hasMasked, PriorityEncoder(masked.asUInt), PriorityEncoder(anyGrantPerInVC.asUInt))
 
     val selOutPerInVC = VecInit.tabulate(params.numVCs) { vc =>
       val grants = VecInit.tabulate(params.numVCs) { outVC => va.io.grant(i)(vc)(outVC).grant }
@@ -182,6 +196,10 @@ class MCRouter(params: NoCParams) extends Module {
     vaOutQueues(i).io.enq.bits.inVC := selInVC
     vaOutQueues(i).io.enq.bits.outVC := outVCSel
     vaOutQueues(i).io.enq.valid := anyGrant
+
+    when (vaOutQueues(i).io.enq.fire) {
+      vaRrPtr(i) := Mux(selInVC === (params.numVCs - 1).U, 0.U, selInVC + 1.U)
+    }
   }
 
   // ===========================================================================
@@ -236,6 +254,9 @@ class MCRouter(params: NoCParams) extends Module {
   }
 
   // 将 SA 授权的 flit 入队到 saOutQueues
+  // SA 轮询指针
+  val saRrPtr = Seq.fill(params.numMCRouterPortsIn)(RegInit(0.U(log2Ceil(params.numVCs).W)))
+
   for (i <- 0 until params.numMCRouterPortsIn) {
     val grantVec = VecInit.tabulate(params.numVCs) { vc =>
       val perPortMatches = VecInit.tabulate(params.numMCRouterPortsOut) { port =>
@@ -244,8 +265,10 @@ class MCRouter(params: NoCParams) extends Module {
       perPortMatches.asUInt.orR && saInputValids(i)(vc)
     }
 
+    val masked = VecInit.tabulate(params.numVCs)(k => grantVec(k) && (k.U >= saRrPtr(i)))
+    val hasMasked = masked.asUInt.orR
     val anyGrant = grantVec.asUInt.orR
-    val selInVC = PriorityEncoder(grantVec.asUInt)
+    val selInVC = Mux(hasMasked, PriorityEncoder(masked.asUInt), PriorityEncoder(grantVec.asUInt))
 
     val selFlit = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> rcInputFlits(i)(vc) })
     val selOutPort = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> saInputPortRegs(i)(vc) })
@@ -256,6 +279,10 @@ class MCRouter(params: NoCParams) extends Module {
     saOutQueues(i).io.enq.bits.inVC := selInVC
     saOutQueues(i).io.enq.bits.outVC := selOutVC
     saOutQueues(i).io.enq.valid := anyGrant
+
+    when (saOutQueues(i).io.enq.fire) {
+      saRrPtr(i) := Mux(selInVC === (params.numVCs - 1).U, 0.U, selInVC + 1.U)
+    }
   }
   
   // ===========================================================================
@@ -294,14 +321,14 @@ class MCRouter(params: NoCParams) extends Module {
   // 流水线寄存器：ST → LT
   // ===========================================================================
   val stToLtQueues = Seq.tabulate(params.numMCRouterPortsOut) { port =>
-    Seq.tabulate(params.numVCs) { vc => Module(new Queue(new Flit(params), 2)) }
+    Seq.tabulate(params.numVCs) { vc => Module(new CountingQueue(new Flit(params), 2)) }
   }
 
   for (port <- 0 until params.numMCRouterPortsOut) {
     for (vc <- 0 until params.numVCs) {
-      stToLtQueues(port)(vc).io.enq.bits := outputMux.io.out(port)(vc).bits
+      stToLtQueues(port)(vc).io.enq.bits  := outputMux.io.out(port)(vc).bits
       stToLtQueues(port)(vc).io.enq.valid := outputMux.io.out(port)(vc).valid
-      outputMux.io.out(port)(vc).ready := stToLtQueues(port)(vc).io.enq.ready
+      outputMux.io.out(port)(vc).ready    := stToLtQueues(port)(vc).io.enq.ready
     }
   }
   
@@ -314,8 +341,8 @@ class MCRouter(params: NoCParams) extends Module {
   // 连接输出Mux到虚拟通道合并模块
   for (port <- 0 until params.numMCRouterPortsOut) {
     for (vc <- 0 until params.numVCs) {
-      vcMergers(port).io.in(vc).bits := stToLtQueues(port)(vc).io.deq.bits
-      vcMergers(port).io.in(vc).valid := stToLtQueues(port)(vc).io.deq.valid
+      vcMergers(port).io.in(vc).bits      := stToLtQueues(port)(vc).io.deq.bits
+      vcMergers(port).io.in(vc).valid     := stToLtQueues(port)(vc).io.deq.valid
       stToLtQueues(port)(vc).io.deq.ready := vcMergers(port).io.in(vc).ready
     }
   }
@@ -339,10 +366,21 @@ class MCRouter(params: NoCParams) extends Module {
     vcMergers(port).io.out.ready := !outputValidRegs(port) || io.out(port).flit.ready
   }
   
+  // ===========================================================================
   // 信用信号处理（输出端口到下游的信用）
+  // ===========================================================================
+  // 这里采用精确策略：creditOut(vc) = depth - occupancy (并截断到 creditWidth)
   for (port <- 0 until params.numMCRouterPortsOut) {
-    // 初始化每个输出端口的每个VC信用为缓冲深度
-    io.out(port).creditOut := VecInit.fill(params.numVCs)(params.bufferDepth.U)
+    val vcCredits = Wire(Vec(params.numVCs, UInt(params.creditWidth.W)))
+    for (vc <- 0 until params.numVCs) {
+      val queue   = stToLtQueues(port)(vc)
+      val depth   = 2.U
+      val free    = depth - queue.io.count
+      val maxCred = ((1 << params.creditWidth) - 1).U(params.creditWidth.W)
+      val credit  = Mux(free > maxCred, maxCred, free)(params.creditWidth - 1, 0)
+      vcCredits(vc) := credit
+    }
+    io.out(port).creditOut := vcCredits
   }
 }
 

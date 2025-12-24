@@ -94,6 +94,16 @@ class VCArbiter(params: NoCParams, numInputs: Int) extends Module {
     // 输出选择信号和有效信号
     io.sel(vc) := arbiters(vc).io.sel
     io.valid(vc) := arbiters(vc).io.valid
+
+    // 断言：每个 VC 上下游的授权 onehot0，且 sel 与 gnt 一致
+    when (io.valid(vc)) {
+      assert(PopCount(io.gnt.map(_(vc))) <= 1.U, "VCArbiter: multiple grants for same VC")
+      for (i <- 0 until numInputs) {
+        when (io.gnt(i)(vc)) {
+          assert(io.sel(vc) === i.U, "VCArbiter: sel does not match grant")
+        }
+      }
+    }
   }
 }
 
@@ -130,5 +140,13 @@ class RouterArbiter(params: NoCParams, numInputs: Int, numOutputs: Int) extends 
     // 输出选择信号和有效信号
     io.sel(port) := portArbiters(port).io.sel
     io.valid(port) := portArbiters(port).io.valid
+
+    // 断言：每个 output port / VC 上的 gnt onehot0
+    for (vc <- 0 until params.numVCs) {
+      val gVec = VecInit.tabulate(numInputs)(i => io.gnt(i)(port)(vc))
+      when (io.valid(port)(vc)) {
+        assert(PopCount(gVec) <= 1.U, "RouterArbiter: multiple grants for same output/VC")
+      }
+    }
   }
 }

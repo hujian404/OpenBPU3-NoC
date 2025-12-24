@@ -92,4 +92,9 @@ class VCMerger(params: NoCParams) extends Module {
   for (vc <- 0 until params.numVCs) {
     io.in(vc).ready := arbiter.io.gnt(vc)
   }
+
+  // 断言：每个周期 grant onehot0，且 valid 与任一输入 valid 对齐
+  when (io.out.valid) {
+    assert(PopCount(arbiter.io.gnt) <= 1.U, "VCMerger: multiple grants for single-cycle output")
+  }
 }

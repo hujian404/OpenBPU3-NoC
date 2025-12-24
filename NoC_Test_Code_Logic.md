@@ -291,18 +291,9 @@ OpenBPU NoC的测试代码采用了模块化、分层的设计理念，通过以
 - **结构验证**：验证Flit字段的位宽和总位宽
 - **配置验证**：测试不同规模的NoC配置
 - **集成测试**：通过SimpleNoCTest验证整体功能
+- **断言验证**：在关键模块（InputBuffer、CountingQueue）中添加安全断言，防止溢出和无效状态
+- **全面测试覆盖**：新增单元测试（CountingQueueSpec、InputBufferCreditSpec）和集成测试（MultiSourceHotspotSpec），确保NoC在各种场景下的正确性和可靠性
 
-
-
----
-
-**文档版本**：v1.0
-**创建日期**：2025年12月18日
-**作者**：H.J
-
-**文档版本**：v1.1
-**更新日期**：2025年12月22日
- 
 ## 8. 测试文件快速索引与说明
 
 - **OpenBPUNoCSpec.scala**: 顶层功能与参数化测试集合。包含：`NoCParams`派生参数测试、不同配置支持测试、以及`Flit`字段位宽/总宽度一致性检查。该文件也包含 `TestSM` / `TestL2Slice` / `SimpleNoCTest` 的 RTL 测试模块生成逻辑（可用于生成 SystemVerilog 以作更高层级验证）。
@@ -311,14 +302,47 @@ OpenBPU NoC的测试代码采用了模块化、分层的设计理念，通过以
 - **RouterArbiterSpec.scala**: 验证 `RouterArbiter` 在多个输入同时请求同一输出端口时的互斥性（最多仅一个输入获 grant），用于证明交换片层面仲裁正确性。
 - **RouterEndToEndSpec.scala**: 端到端功能测试，将一个 flit 从 SM 注入并观察 L2 是否在有限周期内接收，验证整体路径（包含缓冲、路由计算、仲裁和链路）连通性。
 - **CreditFlowSpec.scala**: 验证信用流控制行为：当下游信用为 0 时，NoC 应阻止上游注入，确保流量控制安全性。
+- **CountingQueueSpec.scala**: 验证 `CountingQueue` 的占用计数和边界行为，确保队列状态与实际占用一致。
+- **InputBufferCreditSpec.scala**: 验证 `InputBuffer` 的信用计数机制，确保信用不会溢出且正确控制输入流量。
+- **MultiSourceHotspotSpec.scala**: 验证多源热点场景下 NoC 的性能和可靠性，确保所有 flit 都能正确交付且无死锁。
 
-## 9. 测试编写与验证要点（实战提示）
+## 9. 设计中的断言机制
+
+### 9.1 断言概述
+
+为提高系统可靠性和可验证性，在设计代码中添加了以下关键断言：
+
+#### 9.1.1 InputBuffer 断言
+
+```scala
+// 简单的安全断言：在仿真/形式化中捕获明显协议违例
+assert(creditCounter <= creditMax, "InputBuffer creditCounter overflow")
+```
+
+**目的**：确保信用计数器不会超过缓冲深度，防止缓冲溢出。
+
+#### 9.1.2 CountingQueue 断言
+
+```scala
+// 安全断言（仿真/形式化专用）
+assert(countReg <= max, "CountingQueue occupancy overflow")
+when (countReg === 0.U) {
+  // 队列空时不应有 deq.valid
+  assert(!io.deq.valid, "CountingQueue reports empty but deq.valid is high")
+}
+```
+
+**目的**：
+- 确保队列占用计数不会溢出
+- 确保队列为空时不会输出有效信号
+
+## 10. 测试编写与验证要点（实战提示）
 
 - 使用 `ChiselScalatestTester` 的 `test` 框架时，尽量在测试内对 `creditIn` / `creditOut` 做显式初始化，避免因默认值导致的不可重复行为。
 - 对于需要观测跨阶段传播的信号（例如 RC→VA→SA 的延迟），在断言前多跑几个 `clock.step()` 以允许管线推进。
 - 单元测试优先覆盖模块边界行为（例如 `InputBuffer` 的边界条件、VCAllocator 的竞争情形），集成测试用于覆盖端到端时序与协议交互。
 
-## 10. 生成 Verilog 与集成验证推荐流程
+## 11. 生成 Verilog 与集成验证推荐流程
 
 1. 使用 `sbt` 或 `mill` 编译（见使用指南）。
 2. 用 `sbt` / `mill` 运行 ScalaTest 单元测试，确保所有单元测试通过。
@@ -333,3 +357,9 @@ mill MyNoC.runMain openbpu.OpenBPUNoCTestGenerator
 ```
 
 4. 将生成的 `generated/OpenBPUNoC.sv` 在 Verilator / Questa / VCS 中做功能仿真，接入更复杂的 TB 驱动以验证真实负载场景。
+
+---
+
+**文档版本**：v1.2
+**更新日期**：2025年12月24日
+**作者**：H.J
