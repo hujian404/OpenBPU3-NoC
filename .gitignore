@@ -31,3 +31,4 @@ node_modules/
 generated/
 out/
 test_run_dir/
+.bsp/
