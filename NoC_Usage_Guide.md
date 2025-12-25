@@ -71,11 +71,10 @@ sbt "testOnly *VCAllocatorSpec"
 # sbt - 选择性运行匹配的测试名
 sbt "testOnly -- -z "BufferSpec""
 
-# mill - 当前版本中，由于 mill testrunner 的限制，无法直接将参数传递给 ScalaTest
-# 若需要运行单个测试类，请使用 sbt 命令
+# mill - 运行单个测试类或匹配模式
+mill MyNoC.test -z "VCAllocatorSpec"
+mill MyNoC.test -z "RouterArbiterSpec"
 ```
-
-> 注意：在当前 mill 版本中，`--` 分隔符无法正确将参数转发到 ScalaTest（会出现 "Argument unrecognized by ScalaTest's Runner: --" 错误）。推荐使用 `sbt "testOnly *<SpecName>"` 进行选择性测试。
 
 ### Troubleshooting（常见故障排查）
 
@@ -157,8 +156,8 @@ sbt "testOnly *VCAllocatorSpec"
 sbt "testOnly *RouterArbiterSpec"
 
 # mill - 对应的单测过滤示例（将参数传递给 ScalaTest）
-mill MyNoC.test -- -z "VCAllocatorSpec"
-mill MyNoC.test -- -z "RouterArbiterSpec"
+mill MyNoC.test -z "VCAllocatorSpec"
+mill MyNoC.test -z "RouterArbiterSpec"
 
 # 生成 Verilog
 sbt "runMain openbpu.NoCGenerator"
@@ -194,7 +193,7 @@ val params = NoCParams(
 
 ---
 
-**文档版本**：v1.2
-**更新日期**：2025年12月24日
+**文档版本**：v1.3
+**更新日期**：2025年12月25日
 **作者**：H.J
 

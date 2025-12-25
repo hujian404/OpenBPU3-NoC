@@ -275,12 +275,12 @@ sbt "testOnly *VCAllocatorSpec"
 sbt "testOnly *RouterArbiterSpec"
 sbt "testOnly *BufferSpec"
 # mill - 通过 ScalaTest 的 `-z` 模式选择匹配的测试名
-mill MyNoC.test -- -z "VCAllocatorSpec"
-mill MyNoC.test -- -z "RouterArbiterSpec"
-mill MyNoC.test -- -z "BufferSpec"
+mill MyNoC.test -z "VCAllocatorSpec"
+mill MyNoC.test -z "RouterArbiterSpec"
+mill MyNoC.test -z "BufferSpec"
 ```
 
-注意：在一些环境或 mill 版本中，尝试通过 `mill ... -- -z "<pattern>"` 把参数传给 ScalaTest 会导致 ScalaTest 报错（例如收到未识别的 `--` 参数）。如果发生此类问题，请优先使用 `sbt "testOnly *<SpecName>"` 来做选择性测试，或在 `build.sc` 中添加一个自定义 mill 任务以接受并转发测试过滤参数。
+注意：在当前 mill 版本中，传递参数给 ScalaTest 时不需要使用 `--` 分隔符，直接传递参数即可，例如：`mill MyNoC.test -z "VCAllocatorSpec"`。如果遇到参数传递问题，请优先使用 `sbt "testOnly *<SpecName>"` 来做选择性测试。
 
 ## 7. 总结
 
@@ -349,17 +349,17 @@ when (countReg === 0.U) {
 3. 使用 `OpenBPUNoCTestGenerator` 或项目中的 `NoCGenerator` 生成 SystemVerilog：
 
 ```bash
-# 使用 sbt
-sbt "runMain openbpu.OpenBPUNoCTestGenerator"
+# 使用 sbt (运行测试目录中的主类)
+sbt "Test / runMain openbpu.OpenBPUNoCTestGenerator"
 
-# 使用 mill (若 build.sc 中已定义 runMain)
-mill MyNoC.runMain openbpu.OpenBPUNoCTestGenerator
+# 使用 mill (运行测试目录中的主类)
+mill MyNoC.test.runMain openbpu.OpenBPUNoCTestGenerator
 ```
 
 4. 将生成的 `generated/OpenBPUNoC.sv` 在 Verilator / Questa / VCS 中做功能仿真，接入更复杂的 TB 驱动以验证真实负载场景。
 
 ---
 
-**文档版本**：v1.2
-**更新日期**：2025年12月24日
+**文档版本**：v1.3
+**更新日期**：2025年12月25日
 **作者**：H.J
