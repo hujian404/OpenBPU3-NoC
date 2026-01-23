@@ -32,3 +32,7 @@ generated/
 out/
 test_run_dir/
 .bsp/
+__pycache__/
+**/__pycache__/
+sim_build/
+tests/cocotb/sim_build/

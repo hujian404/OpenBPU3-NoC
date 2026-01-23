@@ -1,0 +1,6 @@
+<testsuites name="results">
+  <testsuite name="all" package="all">
+    <property name="random_seed" value="1769140822" />
+    <testcase name="test_reset_and_clock" classname="test_openbpu" file="/Users/herbet/code/MyNoC/tests/cocotb/test_openbpu.py" lineno="6" time="0.023611783981323242" sim_time_ns="190.0" ratio_time="8046.829504720553" />
+  </testsuite>
+</testsuites>
