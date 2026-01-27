@@ -36,3 +36,4 @@ __pycache__/
 **/__pycache__/
 sim_build/
 tests/cocotb/sim_build/
+tests/cocotb/results.xml
