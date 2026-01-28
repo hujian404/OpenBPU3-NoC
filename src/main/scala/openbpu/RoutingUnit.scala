@@ -35,7 +35,10 @@ class SMRouterRC(params: NoCParams) extends RoutingUnit(params, params.numSMRout
     // 使用 Flit 的 destId 字段的低位映射到 MC-Router
     val dest = io.in(i).bits.destId
     val portWidth = log2Ceil(numOutputs)
-    val mapped = if (numOutputs == 1) 0.U else dest(portWidth-1, 0)
+    // 将目的 ID 映射为目标 MC Router：从 dest 中去除 L2 切片的低位字段
+    val l2Bits = log2Ceil(params.numL2SlicesPerMC)
+    val mapped = if (numOutputs == 1) 0.U else dest(l2Bits + portWidth - 1, l2Bits)
+    // 例如：如果每个 MC 有 8 个 L2 切片，则 l2Bits=3，mapped = dest[ l2Bits+portWidth-1 : l2Bits ]
     io.out(i).port := mapped
     io.out(i).vc := io.in(i).bits.vc
   }
