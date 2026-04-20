@@ -1,0 +1,10 @@
+完全独立，不污染 Chisel、不污染 GPGPU-Sim
+
+verilator-noc-lib/
+├── noc_top.v             # 从openbpu3-noc/output/verilog/拷贝过来的顶层RTL
+├── verilator_build/      # Verilator编译临时文件（自动生成）
+├── Vnoc_top.h / cpp      # Verilator生成的RTL-C++周期精确模型（带clk/eval/posedge）
+├── Makefile              # 独立Verilator编译脚本，生成静态库 libchisel_noc.a
+└── inc/                  # 对外暴露端口头文件：输入valid/ready/flit接口
+
+作用：把NoC 硬件代码编译成独立静态 C++ 库，给 GPGPU-Sim 链接使用。

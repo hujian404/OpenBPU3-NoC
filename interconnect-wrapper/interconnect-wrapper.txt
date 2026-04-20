@@ -1,0 +1,7 @@
+解决 RTL 边沿时序 vs GPGPU 软件周期模型不兼容的全部代码
+不修改 GPGPU-Sim 原生源码，全部外置插件化
+设计原则：
+- 所有时序兼容逻辑全部在这里
+- NoC Chisel 源码不改
+- GPGPU-Sim 原生不改
+- 只链接这个 Wrapper+Verilator 库

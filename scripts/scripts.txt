@@ -1,0 +1,5 @@
+scripts/
+├── chisel_gen_verilog.sh   # 一键编译openbpu3-noc导出Verilog
+├── build_verilator_lib.sh  # 一键编译Verilator生成C++静态库
+├── build_gpgpusim.sh       # 一键编译带自定义Chisel NoC的GPGPU-Sim
+└── run_test.sh                # 一键跑CUDA测试用例+输出周期精确报告
