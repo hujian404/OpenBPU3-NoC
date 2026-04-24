@@ -1,4 +1,0 @@
-git submodule add https://github.com/gpgpu-sim/gpgpu-sim_distribution gpgpusim
-git commit -m "Add GPGPU-Sim as submodule"
-
-唯一修改：GPGPU-Sim 根目录 Makefile追加链接外部 Wrapper 和 Verilator 库，原生源码不动。

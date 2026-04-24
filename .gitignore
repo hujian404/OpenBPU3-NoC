@@ -32,6 +32,10 @@ generated/
 out/
 test_run_dir/
 .bsp/
+.sandbox-home/
+run/
+verilator-noc-lib/build/
+interconnect-wrapper/build/
 __pycache__/
 **/__pycache__/
 sim_build/

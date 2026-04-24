@@ -1,0 +1,6 @@
+[submodule "gpgpu-sim"]
+	path = gpgpu-sim
+	url = https://github.com/gpgpu-sim/gpgpu-sim_distribution.git
+[submodule "tests/cuda/gpu-rodinia-3.1"]
+	path = tests/cuda/gpu-rodinia-3.1
+	url = https://github.com/kiliakis/gpu-rodinia-3.1.git

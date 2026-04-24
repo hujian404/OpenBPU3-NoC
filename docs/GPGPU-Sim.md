@@ -1,5 +1,24 @@
 # GPGPU-Sim 部署与 Rodinia 测试集运行指南（Ubuntu 24.04 + GV100）
 
+## 仓库内集成版说明
+
+本仓库已经把以下外部组件接入为 Git submodule：
+
+- `gpgpu-sim/` -> `https://github.com/gpgpu-sim/gpgpu-sim_distribution.git`
+- `tests/cuda/gpu-rodinia-3.1/` -> `https://github.com/kiliakis/gpu-rodinia-3.1.git`
+
+因此不再建议在仓库外单独 `git clone` 两个工程。推荐做法是直接克隆本仓库并初始化子模块：
+
+```bash
+git clone --recurse-submodules <your-openbpu-repo-url>
+cd OpenBPU3-NoC
+
+# 如果不是 --recurse-submodules 克隆的，补这一句
+git submodule update --init --recursive
+```
+
+下文所有路径都以本仓库根目录为基准。
+
 ## 📌 概述
 本文档记录了在 **Ubuntu 24.04** 系统上从零开始部署 **GPGPU-Sim 4.2.0** 模拟器，配置模拟 **NVIDIA GV100 (Volta)** 架构，并成功运行 **Rodinia 3.1** 基准测试集的完整流程。
 
@@ -48,9 +67,9 @@ sudo sh cuda_11.8.0_520.61.05_linux.run --toolkit --silent --override --toolkitp
 ### 2.1 克隆源码仓库
 
 ```bash
-cd ~/Project
-git clone https://github.com/gpgpu-sim/gpgpu-sim_distribution.git
-cd gpgpu-sim_distribution
+cd /path/to/OpenBPU3-NoC
+git submodule update --init --recursive
+cd gpgpu-sim
 ```
 
 
@@ -101,10 +120,9 @@ git config --global --add safe.directory $(pwd)
 
 ### 3.1 克隆 Rodinia 仓库
 ```bash
-cd ~/Project
-# 注意：此仓库已包含所有源代码和必要的测试数据
-git clone https://github.com/kiliakis/gpu-rodinia-3.1.git
-cd gpu-rodinia-3.1
+cd /path/to/OpenBPU3-NoC
+git submodule update --init --recursive
+cd tests/cuda/gpu-rodinia-3.1
 ```
 
 （若链接失效，请从 [Rodinia 官网](http://lava.cs.virginia.edu/Rodinia/download_links.htm) 获取数据包）
@@ -146,7 +164,7 @@ Rodinia 3.1 默认编译架构 `sm_13` 在 CUDA 11.x 中已被移除，需批量
 修改 `common/common.mk`（影响全局编译），打开文件：
 
 ```bash
-cd ~/Project/gpu-rodinia-3.1/common
+cd /path/to/OpenBPU3-NoC/tests/cuda/gpu-rodinia-3.1/common
 nano common.mk
 ```
 
@@ -208,7 +226,7 @@ g++ --version
 由于顶层 Makefile 可能缺失，推荐直接进入测试子目录编译：
 
 ```bash
-cd ~/Project/gpu-rodinia-3.1/cuda/backprop
+cd /path/to/OpenBPU3-NoC/tests/cuda/gpu-rodinia-3.1/cuda/backprop
 make clean
 make
 ```
@@ -242,7 +260,7 @@ sudo update-alternatives --config g++
 每次打开新终端运行前，首先加载 GPGPU-Sim 环境：
 
 ```bash
-cd ~/Project/gpgpu-sim_distribution
+cd /path/to/OpenBPU3-NoC/gpgpu-sim
 export CUDA_INSTALL_PATH=/usr/local/cuda-11.8
 source setup_environment release
 ```
@@ -258,7 +276,7 @@ export GPGPUSIM_CONFIG=$PWD/gpgpusim.config
 ### 4.2 运行 `backprop` 测试
 
 ```bash
-cd ~/Project/gpu-rodinia-3.1/cuda/backprop
+cd /path/to/OpenBPU3-NoC/tests/cuda/gpu-rodinia-3.1/cuda/backprop
 ./backprop 65536
 ```
 
@@ -267,9 +285,9 @@ cd ~/Project/gpu-rodinia-3.1/cuda/backprop
 若提示找不到 `gpgpusim.config`，直接将配置文件复制到当前目录：
 
 ```bash
-cp ~/Project/gpgpu-sim_distribution/gpgpusim.config .
-cp ~/Project/gpgpu-sim_distribution/accelwattch*.xml .
-cp ~/Project/gpgpu-sim_distribution/config_volta*.icnt .
+cp /path/to/OpenBPU3-NoC/gpgpu-sim/gpgpusim.config .
+cp /path/to/OpenBPU3-NoC/gpgpu-sim/accelwattch*.xml .
+cp /path/to/OpenBPU3-NoC/gpgpu-sim/config_volta*.icnt .
 ```
 
 然后直接运行 `./backprop 65536`。
@@ -390,7 +408,7 @@ GPGPU-Sim: *** exit detected ***
 1. 加载 GPGPU-Sim 环境（每次新开终端必须执行）
 
 ```bash
-cd ~/Project/gpgpu-sim_distribution
+cd /path/to/OpenBPU3-NoC/gpgpu-sim
 export CUDA_INSTALL_PATH=/usr/local/cuda-11.8
 source setup_environment release
 export GPGPUSIM_CONFIG=$PWD/gpgpusim.config  # 可选，或直接将配置文件复制到测试目录
@@ -401,7 +419,7 @@ export GPGPUSIM_CONFIG=$PWD/gpgpusim.config  # 可选，或直接将配置文件
 2. 进入目标测试目录并编译
 
 ```bash
-cd ~/Project/gpu-rodinia-3.1/cuda/<测试名称>
+cd /path/to/OpenBPU3-NoC/tests/cuda/gpu-rodinia-3.1/cuda/<测试名称>
 make clean
 make
 ```
@@ -418,11 +436,11 @@ make
 
 ```bash
 # 1. 加载环境（如上）
-cd ~/Project/gpgpu-sim_distribution
+cd /path/to/OpenBPU3-NoC/gpgpu-sim
 source ~/load_gpgpusim.sh   # 若已创建脚本
 
 # 2. 进入测试目录并编译
-cd ~/Project/gpu-rodinia-3.1/cuda/hotspot
+cd /path/to/OpenBPU3-NoC/tests/cuda/gpu-rodinia-3.1/cuda/hotspot
 make clean
 make
 
@@ -447,6 +465,6 @@ make
 
 ### ⚠️ 注意事项
 
-- **配置文件**：若运行时提示找不到 `gpgpusim.config`，将 `~/Project/gpgpu-sim_distribution/` 下的 `gpgpusim.config`、`accelwattch*.xml`、`config_volta*.icnt` 复制到测试目录。
+- **配置文件**：若运行时提示找不到 `gpgpusim.config`，将 `/path/to/OpenBPU3-NoC/gpgpu-sim/` 下的 `gpgpusim.config`、`accelwattch*.xml`、`config_volta*.icnt` 复制到测试目录。
 - **GCC 版本**：若后续系统更新导致 GCC 默认版本恢复，需重新执行 `sudo update-alternatives --config gcc` 切换回 GCC-11。
 - **批量测试**：可写脚本循环运行不同参数，收集 IPC、周期数等统计数据。
