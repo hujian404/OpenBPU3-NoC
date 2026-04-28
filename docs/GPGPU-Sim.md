@@ -19,6 +19,19 @@ git submodule update --init --recursive
 
 下文所有路径都以本仓库根目录为基准。
 
+## 关于集成分支
+
+如果你当前所在分支是 `codex/gpgpu-sim-integrated`，则有一个重要区别：
+
+- `gpgpu-sim/` 不再是 submodule
+- 而是已经纳入本仓库版本管理的源码快照
+
+这种模式更适合：
+
+- 在服务器上快速部署
+- 精确复现某个集成状态
+- 避免 `gpgpu-sim` 本地修改只存在于 dirty submodule 中
+
 ## 当前仓库内自动化约定
 
 当前仓库已经补充了两项自动化能力：
