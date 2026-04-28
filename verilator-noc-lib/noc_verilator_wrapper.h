@@ -37,6 +37,9 @@ class NocVerilatorWrapper : public NocIf {
 
   explicit NocVerilatorWrapper(const Config& config);
   ~NocVerilatorWrapper() override;
+  uint64_t held_input_cycles() const;
+  uint64_t duplicate_output_flits_suppressed() const;
+  uint64_t repeated_output_cycles_suppressed() const;
 
  protected:
   bool CanAccept(uint32_t src, uint32_t dst,
@@ -87,6 +90,9 @@ class NocVerilatorWrapper : public NocIf {
   std::vector<bool> previous_output_valid_;
   std::vector<uint64_t> previous_output_flit_;
   std::set<uint64_t> seen_output_packet_ids_;
+  uint64_t held_input_cycles_;
+  uint64_t duplicate_output_flits_suppressed_;
+  uint64_t repeated_output_cycles_suppressed_;
   int32_t active_source_node_;
   uint64_t active_tracking_id_;
   bool active_packet_accepted_;

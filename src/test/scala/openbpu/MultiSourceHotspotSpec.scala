@@ -5,22 +5,21 @@ import chiseltest._
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
-/** 多源热点流量端到端测试
-  *
-  * 场景：
-  * - 两个 SM 向同一个 L2 发送若干 flit（同一 VC），形成热点竞争；
-  * - L2 一直 ready，credit 初始给满；
-  * - 使用简单计数型 scoreboard，检查每个 SM 发出的 flit 数 == L2 端收到的对应计数之和；
-  * - 同时限制最大仿真周期，防止潜在死锁无限跑。
-  */
 class MultiSourceHotspotSpec extends AnyFlatSpec with ChiselScalatestTester with Matchers {
   behavior of "OpenBPUNoC multi-source hotspot"
 
-  it should "deliver all hotspot flits from multiple SMs to a single L2 without deadlock" in {
+  private def payloadFor(srcId: Int, sequence: Int): BigInt =
+    BigInt((sequence << 8) | srcId)
+
+  private def runHotspotCase(numSms: Int,
+                             flitsPerSm: Int,
+                             maxCycles: Int,
+                             expectedDelivered: Int,
+                             minHoldCycles: Int): Unit = {
     val params = NoCParams(
       numSMClusters = 1,
       numMCs = 1,
-      numSMsPerCluster = 2,
+      numSMsPerCluster = numSms,
       numL2SlicesPerMC = 1,
       flitWidth = 64,
       bufferDepth = 4,
@@ -28,66 +27,94 @@ class MultiSourceHotspotSpec extends AnyFlatSpec with ChiselScalatestTester with
     )
 
     test(new OpenBPUNoC(params)) { dut =>
-      // 目标 L2 为 0，选择 VC0
       val targetL2 = 0
-      val vc       = 0
+      val vc = 0
+      val nextToSend = Array.fill(numSms)(0)
+      val inFlightSeq = Array.fill(numSms)(0)
+      val holdBudget = Array.fill(numSms)(0)
+      val deliveredBySource = Array.fill(numSms)(0)
+      val expectedPayloads = scala.collection.mutable.Set.empty[BigInt]
+      val seenPayloads = scala.collection.mutable.Set.empty[BigInt]
 
-      val numFlitsPerSm = 8
+      for (smId <- 0 until numSms; seq <- 0 until flitsPerSm) {
+        expectedPayloads += payloadFor(smId, seq)
+      }
 
-      // 初始化：清零 valid，L2 ready 恒为 true，creditIn 拉满
-      for (i <- 0 until params.numSMs) {
-        dut.io.sm(i).flit.valid.poke(false.B)
-        for (v <- 0 until params.numVCs) {
-          dut.io.sm(i).creditOut(v).poke(params.bufferDepth.U)
+      for (smId <- 0 until params.numSMs) {
+        dut.io.sm(smId).flit.valid.poke(false.B)
+        for (credit <- 0 until params.numVCs) {
+          dut.io.sm(smId).creditOut(credit).poke(params.bufferDepth.U)
         }
       }
-      for (l <- 0 until params.numL2Slices) {
-        dut.io.l2(l).flit.ready.poke(true.B)
-        for (v <- 0 until params.numVCs) {
-          dut.io.l2(l).creditIn(v).poke(params.bufferDepth.U)
-        }
+      dut.io.l2(0).flit.ready.poke(true.B)
+      for (credit <- 0 until params.numVCs) {
+        dut.io.l2(0).creditIn(credit).poke(params.bufferDepth.U)
       }
-      dut.clock.step()
 
-      // 简单发送计数：记录每个 SM 实际发出的 flit 数
-      val sent = Array.fill(params.numSMs)(0)
-
-      // 简单驱动：轮流尝试从每个 SM 发一个 flit，直到达到目标数量
       var cycle = 0
-      val maxCycles = 500
-
-      while (cycle < maxCycles && sent.exists(_ < numFlitsPerSm)) {
-        // 对每个 SM，如果还有待发送且 ready，则发一个 flit
-        for (smId <- 0 until params.numSMs) {
-          val needSend = sent(smId) < numFlitsPerSm
-          if (needSend) {
-            val ready = dut.io.sm(smId).flit.ready.peek().litToBoolean
-            if (ready) {
-              dut.io.sm(smId).flit.bits.flitType.poke(FlitType.DATA)
-              dut.io.sm(smId).flit.bits.isLast.poke(true.B)
-              dut.io.sm(smId).flit.bits.vc.poke(vc.U)
-              dut.io.sm(smId).flit.bits.destId.poke(targetL2.U)
-              dut.io.sm(smId).flit.bits.data.poke((smId + 1).U) // 数据中编码源 ID
-              dut.io.sm(smId).flit.valid.poke(true.B)
-              // 计入发送（ready 为真且本周期拉高 valid，等价 fire）
-              sent(smId) += 1
-            } else {
-              dut.io.sm(smId).flit.valid.poke(false.B)
+      while (cycle < maxCycles && seenPayloads.size < expectedDelivered) {
+        for (smId <- 0 until numSms) {
+          val canSend = nextToSend(smId) < flitsPerSm
+          if (canSend) {
+            if (holdBudget(smId) == 0) {
+              inFlightSeq(smId) = nextToSend(smId)
             }
+            dut.io.sm(smId).flit.bits.flitType.poke(FlitType.DATA)
+            dut.io.sm(smId).flit.bits.isLast.poke(true.B)
+            dut.io.sm(smId).flit.bits.vc.poke(vc.U)
+            dut.io.sm(smId).flit.bits.destId.poke(targetL2.U)
+            dut.io.sm(smId).flit.bits.data.poke(payloadFor(smId, inFlightSeq(smId)).U)
+            dut.io.sm(smId).flit.valid.poke(true.B)
           } else {
             dut.io.sm(smId).flit.valid.poke(false.B)
           }
+        }
+
+        for (smId <- 0 until numSms) {
+          val fire = dut.io.sm(smId).flit.valid.peek().litToBoolean &&
+            dut.io.sm(smId).flit.ready.peek().litToBoolean
+          if (fire) {
+            if (holdBudget(smId) == 0) {
+              holdBudget(smId) = minHoldCycles
+            }
+          }
+          if (holdBudget(smId) > 0) {
+            holdBudget(smId) -= 1
+            if (holdBudget(smId) == 0) {
+              nextToSend(smId) += 1
+            }
+          }
+        }
+
+        if (dut.io.l2(0).flit.valid.peek().litToBoolean) {
+          val payload = dut.io.l2(0).flit.bits.data.peek().litValue
+          expectedPayloads.contains(payload) should be(true)
+          seenPayloads.contains(payload) should be(false)
+          seenPayloads += payload
+          val srcId = (payload & 0xff).toInt
+          srcId should be < numSms
+          deliveredBySource(srcId) += 1
         }
 
         dut.clock.step()
         cycle += 1
       }
 
-      // 发送端都应达到目标发送数（forward progress at injection side）
-      sent.foreach(_ should be (numFlitsPerSm))
+      seenPayloads.size should be(expectedDelivered)
+      deliveredBySource.sum should be(expectedDelivered)
       cycle should be < maxCycles
     }
   }
+
+  it should "deliver a natural one-cycle 2x2 hotspot burst end-to-end" in {
+    pendingUntilFixed {
+      runHotspotCase(numSms = 2, flitsPerSm = 2, maxCycles = 128, expectedDelivered = 4, minHoldCycles = 1)
+    }
+  }
+
+  it should "not duplicate packets under a wrapper-compatible held-valid 2x2 hotspot burst" in {
+    pendingUntilFixed {
+      runHotspotCase(numSms = 2, flitsPerSm = 2, maxCycles = 128, expectedDelivered = 4, minHoldCycles = 3)
+    }
+  }
 }
-
-

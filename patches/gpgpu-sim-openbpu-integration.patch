@@ -104,7 +104,7 @@ index 5974ad0..4d7a2ad 100644
  
  echo -n "GPGPU-Sim version $GPGPUSIM_VERSION_STRING (build $GPGPUSIM_BUILD_STRING) ";
 diff --git a/src/gpgpu-sim/icnt_wrapper.cc b/src/gpgpu-sim/icnt_wrapper.cc
-index 82785dc..d39bed0 100644
+index 82785dc..6220a96 100644
 --- a/src/gpgpu-sim/icnt_wrapper.cc
 +++ b/src/gpgpu-sim/icnt_wrapper.cc
 @@ -27,10 +27,23 @@
@@ -131,7 +131,7 @@ index 82785dc..d39bed0 100644
  
  icnt_create_p icnt_create;
  icnt_init_p icnt_init;
-@@ -50,11 +63,150 @@ char* g_network_config_filename;
+@@ -50,11 +63,151 @@ char* g_network_config_filename;
  struct inct_config g_inct_config;
  LocalInterconnect* g_localicnt_interface;
  
@@ -150,6 +150,7 @@ index 82785dc..d39bed0 100644
 +  unsigned request_pending_per_output;
 +  unsigned reset_cycles;
 +  unsigned request_fixed_hops;
++  unsigned request_min_input_hold_cycles;
 +  unsigned reply_fallback_latency;
 +  unsigned reply_fallback_hops;
 +  unsigned reply_pending_per_input;
@@ -158,7 +159,7 @@ index 82785dc..d39bed0 100644
 +};
 +
 +openbpu_icnt_config g_openbpu_config = {
-+    80, 64, 64, 53, 7, 1, 5, 256, 4096, 5, 2, 20, 2, 256, 4096, 40};
++    80, 64, 64, 53, 7, 1, 5, 256, 4096, 5, 2, 5, 20, 2, 256, 4096, 40};
 +
 +class FixedLatencyNoc : public openbpu::NocIf {
 + public:
@@ -285,7 +286,7 @@ index 82785dc..d39bed0 100644
  static void intersim2_create(unsigned int n_shader, unsigned int n_mem) {
    g_icnt_interface->CreateInterconnect(n_shader, n_mem);
  }
-@@ -134,7 +286,153 @@ static unsigned LocalInterconnect_get_flit_size() {
+@@ -134,7 +287,155 @@ static unsigned LocalInterconnect_get_flit_size() {
    return g_localicnt_interface->GetFlitSize();
  }
  
@@ -317,6 +318,8 @@ index 82785dc..d39bed0 100644
 +      g_openbpu_config.request_pending_per_output;
 +  request_config.reset_cycles = g_openbpu_config.reset_cycles;
 +  request_config.fixed_hops = g_openbpu_config.request_fixed_hops;
++  request_config.min_input_hold_cycles =
++      g_openbpu_config.request_min_input_hold_cycles;
 +
 +  std::unique_ptr<openbpu::NocIf> request_noc(
 +      new openbpu::NocVerilatorWrapper(request_config));
@@ -440,7 +443,7 @@ index 82785dc..d39bed0 100644
  
  void icnt_reg_options(class OptionParser* opp) {
    option_parser_register(opp, "-network_mode", OPT_INT32, &g_network_mode,
-@@ -143,7 +441,7 @@ void icnt_reg_options(class OptionParser* opp) {
+@@ -143,7 +444,7 @@ void icnt_reg_options(class OptionParser* opp) {
                           &g_network_config_filename,
                           "Interconnection network config file", "mesh");
  
@@ -449,7 +452,7 @@ index 82785dc..d39bed0 100644
    option_parser_register(opp, "-icnt_in_buffer_limit", OPT_UINT32,
                           &g_inct_config.in_buffer_limit, "in_buffer_limit",
                           "64");
-@@ -158,12 +456,65 @@ void icnt_reg_options(class OptionParser* opp) {
+@@ -158,12 +459,70 @@ void icnt_reg_options(class OptionParser* opp) {
                           &g_inct_config.verbose, "inct_verbose", "0");
    option_parser_register(opp, "-icnt_grant_cycles", OPT_UINT32,
                           &g_inct_config.grant_cycles, "grant_cycles", "1");
@@ -492,6 +495,11 @@ index 82785dc..d39bed0 100644
 +                         &g_openbpu_config.request_fixed_hops,
 +                         "Fixed hop count recorded for OpenBPU request packets",
 +                         "2");
++  option_parser_register(
++      opp, "-openbpu_req_min_input_hold_cycles", OPT_UINT32,
++      &g_openbpu_config.request_min_input_hold_cycles,
++      "Cycles to hold each OpenBPU request flit stable at the Verilator input",
++      "5");
 +  option_parser_register(opp, "-openbpu_reply_latency", OPT_UINT32,
 +                         &g_openbpu_config.reply_fallback_latency,
 +                         "Fallback reply-network latency in cycles", "20");
@@ -516,7 +524,7 @@ index 82785dc..d39bed0 100644
        g_icnt_interface = InterconnectInterface::New(g_network_config_filename);
        icnt_create = intersim2_create;
        icnt_init = intersim2_init;
-@@ -191,6 +542,19 @@ void icnt_wrapper_init() {
+@@ -191,6 +550,19 @@ void icnt_wrapper_init() {
        icnt_display_state = LocalInterconnect_display_state;
        icnt_get_flit_size = LocalInterconnect_get_flit_size;
        break;

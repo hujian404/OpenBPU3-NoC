@@ -51,7 +51,7 @@ NocVerilatorWrapper::Config::Config()
       max_pending_per_output(64),
       reset_cycles(5),
       fixed_hops(2),
-      min_input_hold_cycles(3) {}
+      min_input_hold_cycles(5) {}
 
 NocVerilatorWrapper::NocVerilatorWrapper(const Config& config)
     : NocIf("openbpu-verilator"),
@@ -64,6 +64,9 @@ NocVerilatorWrapper::NocVerilatorWrapper(const Config& config)
       input_presentation_cycles_(config.num_input_nodes, 0),
       previous_output_valid_(config.num_output_nodes, false),
       previous_output_flit_(config.num_output_nodes, 0),
+      held_input_cycles_(0),
+      duplicate_output_flits_suppressed_(0),
+      repeated_output_cycles_suppressed_(0),
       active_source_node_(-1),
       active_tracking_id_(0),
       active_packet_accepted_(false),
@@ -82,6 +85,18 @@ NocVerilatorWrapper::NocVerilatorWrapper(const Config& config)
 NocVerilatorWrapper::~NocVerilatorWrapper() {
   delete top_;
   delete context_;
+}
+
+uint64_t NocVerilatorWrapper::held_input_cycles() const {
+  return held_input_cycles_;
+}
+
+uint64_t NocVerilatorWrapper::duplicate_output_flits_suppressed() const {
+  return duplicate_output_flits_suppressed_;
+}
+
+uint64_t NocVerilatorWrapper::repeated_output_cycles_suppressed() const {
+  return repeated_output_cycles_suppressed_;
 }
 
 bool NocVerilatorWrapper::CanAccept(uint32_t src, uint32_t dst,
@@ -185,6 +200,9 @@ void NocVerilatorWrapper::DriveInputs() {
     }
     const EncodedPacket& encoded = ingress_queues_[node].front();
     ++input_presentation_cycles_[node];
+    if (input_presentation_cycles_[node] > 1) {
+      ++held_input_cycles_;
+    }
     SetFlatBit(&top_->in_valid, node, true);
     SetFlatField(&top_->in_packet, node * config_.packet_bits,
                  config_.packet_bits, EncodeFlitBits(encoded));
@@ -233,6 +251,7 @@ void NocVerilatorWrapper::CaptureOutputs() {
                      config_.packet_bits);
     if (previous_output_valid_[node] &&
         previous_output_flit_[node] == flit_bits) {
+      ++repeated_output_cycles_suppressed_;
       continue;
     }
 
@@ -240,6 +259,7 @@ void NocVerilatorWrapper::CaptureOutputs() {
         flit_bits >> (2u + 1u + config_.vc_bits + config_.dest_bits);
     const uint32_t tracking_id = DecodeTrackingId(data_bits);
     if (seen_output_packet_ids_.count(tracking_id) != 0u) {
+      ++duplicate_output_flits_suppressed_;
       previous_output_valid_[node] = true;
       previous_output_flit_[node] = flit_bits;
       continue;
