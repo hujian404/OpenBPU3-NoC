@@ -17,6 +17,7 @@ CREDIT_WIDTH="${NOC_CREDIT_WIDTH:-5}"
 RTL_FILE="${RTL_DIR}/${MODULE_NAME}.sv"
 SKIP_CHISEL="${NOC_SKIP_CHISEL:-0}"
 GENERATOR_MAIN="${NOC_GENERATOR_MAIN:-openbpu.NoCGenerator}"
+METADATA_FILE="${ROOT_DIR}/generated/openbpu_noc_meta.env"
 
 mkdir -p "${RTL_DIR}" "${VERILATOR_DIR}"
 rm -rf "${VERILATOR_DIR}/obj_dir"
@@ -40,12 +41,30 @@ if [[ "${SKIP_CHISEL}" != "1" ]]; then
   )
 fi
 
+if [[ -f "${METADATA_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${METADATA_FILE}"
+  MODULE_NAME="${NOC_MODULE_NAME:-${MODULE_NAME}}"
+  NUM_INPUTS="${NOC_NUM_INPUTS:-${NUM_INPUTS}}"
+  NUM_OUTPUTS="${NOC_NUM_OUTPUTS:-${NUM_OUTPUTS}}"
+  DEST_BITS="${NOC_DEST_BITS:-${DEST_BITS}}"
+  VC_BITS="${NOC_VC_BITS:-${VC_BITS}}"
+  DATA_BITS="${NOC_DATA_BITS:-${DATA_BITS}}"
+  PACKET_BITS="${NOC_PACKET_BITS:-${PACKET_BITS}}"
+  CREDIT_WIDTH="${NOC_CREDIT_WIDTH:-${CREDIT_WIDTH}}"
+  RTL_FILE="${RTL_DIR}/${MODULE_NAME}.sv"
+  if [[ ! -f "${RTL_FILE}" && -f "${RTL_FALLBACK_DIR}/${MODULE_NAME}.sv" ]]; then
+    RTL_FILE="${RTL_FALLBACK_DIR}/${MODULE_NAME}.sv"
+  fi
+fi
+
 if [[ ! -f "${RTL_FILE}" ]]; then
   echo "[build_noc] Could not find generated RTL for ${MODULE_NAME}" >&2
   exit 1
 fi
 
 echo "[build_noc] Generating shim top ${TOP_NAME}.sv"
+echo "[build_noc] Using metadata: module=${MODULE_NAME} inputs=${NUM_INPUTS} outputs=${NUM_OUTPUTS} dest_bits=${DEST_BITS} vc_bits=${VC_BITS} data_bits=${DATA_BITS} packet_bits=${PACKET_BITS}"
 python3 - "${ROOT_DIR}" "${RTL_DIR}" "${VERILATOR_DIR}" "${MODULE_NAME}" "${TOP_NAME}" \
   "${NUM_INPUTS}" "${NUM_OUTPUTS}" "${DEST_BITS}" "${VC_BITS}" "${DATA_BITS}" "${CREDIT_WIDTH}" <<'PY'
 import pathlib

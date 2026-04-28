@@ -19,6 +19,21 @@ git submodule update --init --recursive
 
 下文所有路径都以本仓库根目录为基准。
 
+## 当前仓库内自动化约定
+
+当前仓库已经补充了两项自动化能力：
+
+- `scripts/build_sim.sh` 会在构建前自动检查并应用
+  `patches/gpgpu-sim-openbpu-integration.patch`
+- `scripts/build_noc.sh` 会优先读取 Chisel 生成的
+  `generated/openbpu_noc_meta.env`
+
+这意味着：
+
+- 重新 clone 到新机器后，不需要手工编辑 `gpgpu-sim` 源码再构建
+- NoC 端口数、`dest_bits`、`vc_bits`、`data_bits` 等默认值优先以
+  Chisel 生成元数据为准，避免脚本手写参数和 RTL 漂移
+
 ## 📌 概述
 本文档记录了在 **Ubuntu 24.04** 系统上从零开始部署 **GPGPU-Sim 4.2.0** 模拟器，配置模拟 **NVIDIA GV100 (Volta)** 架构，并成功运行 **Rodinia 3.1** 基准测试集的完整流程。
 
@@ -81,6 +96,16 @@ export CUDA_INSTALL_PATH=/usr/local/cuda-11.8
 export PATH=$CUDA_INSTALL_PATH/bin:$PATH
 source setup_environment release
 make -j$(nproc)
+```
+
+如果通过本仓库统一构建，推荐改用：
+
+```bash
+cd /path/to/OpenBPU3-NoC
+export CUDA_INSTALL_PATH=/usr/local/cuda-11.8
+export PATH=$CUDA_INSTALL_PATH/bin:/usr/local/bin:$PATH
+export LD_LIBRARY_PATH=$CUDA_INSTALL_PATH/lib64:$LD_LIBRARY_PATH
+NOC_FORCE_BUILD_NOC=1 ./scripts/build_sim.sh local
 ```
 
 

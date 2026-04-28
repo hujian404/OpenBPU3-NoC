@@ -41,6 +41,10 @@ EOF
     exit 1
   fi
 
+  if [[ -f "${ROOT_DIR}/patches/gpgpu-sim-openbpu-integration.patch" ]]; then
+    "${ROOT_DIR}/scripts/apply_gpgpu_sim_patch.sh"
+  fi
+
   if [[ "${NOC_FORCE_BUILD_NOC:-0}" == "1" || ! -e "${ROOT_DIR}/verilator-noc-lib/build/obj_dir/Vnoc_top.h" ]]; then
     "${ROOT_DIR}/scripts/build_noc.sh"
   fi

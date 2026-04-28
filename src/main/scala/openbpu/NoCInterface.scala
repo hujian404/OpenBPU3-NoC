@@ -16,15 +16,11 @@ class Flit(params: NoCParams) extends Bundle {
   // Flit头部信息
   val flitType = UInt(2.W)            // Flit类型
   val isLast = Bool()                 // 是否为包的最后一个Flit
-  val vc = UInt(log2Ceil(params.numVCs).W)  // 虚拟通道ID
-  // 目标ID的位宽应覆盖所有可能的目的节点（SMs 或 L2切片）
-  private val destWidth = log2Ceil(params.numSMs.max(params.numL2Slices))
-  val destId = UInt(destWidth.W)      // 目标ID
-
-  // 数据负载：根据参数 `flitWidth` 计算，可调整以匹配整体flit位宽
-  private val headerWidth = 2 + 1 + log2Ceil(params.numVCs) + destWidth
-  private val dataWidth = Math.max(1, params.flitWidth - headerWidth)
-  val data = UInt(dataWidth.W)
+  val vc = UInt(params.vcWidth.W)     // 虚拟通道ID
+  // destId 编码全局目的节点号。当前请求网络使用 L2 slice 全局编号做路由。
+  val destId = UInt(params.destWidth.W)
+  // 数据负载宽度统一由 NoCParams 推导，避免 RTL / wrapper / build 脚本漂移。
+  val data = UInt(params.flitDataWidth.W)
   
   // 辅助方法
   def isRequest: Bool = flitType === FlitType.REQUEST

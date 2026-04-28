@@ -56,6 +56,28 @@ This is a deliberate intermediate step: request traffic is already attached to
 the hardware model, while reply traffic remains software-modeled until a reverse
 NoC RTL is available.
 
+## Flit-format rationale
+
+The current request-network shim assumes a single-flit packet format derived
+directly from `NoCParams`:
+
+- `2` bits: `flitType`
+- `1` bit: `isLast`
+- `log2Ceil(numVCs)` bits: `vc`
+- `log2Ceil(max(numSMs, numL2Slices))` bits: `destId`
+- remaining bits: `data`
+
+For the default 80-SM / 64-L2 configuration this resolves to:
+
+- `packet_bits = 64`
+- `vc_bits = 1`
+- `dest_bits = 7`
+- `data_bits = 53`
+
+`scripts/build_noc.sh` now reads these values from
+`generated/openbpu_noc_meta.env`, which is emitted by the Chisel generator.
+That keeps RTL, shim wiring, and Verilator wrapper defaults aligned.
+
 ## Adapter details
 
 `openbpu::GpgpuSimNocAdapter` now performs:
@@ -100,9 +122,11 @@ The current intended build flow is:
 
 1. `scripts/build_noc.sh`
    - generates `noc_top.sv`
+   - reads `generated/openbpu_noc_meta.env`
    - runs Verilator
    - builds `verilator-noc-lib/build/obj_dir/Vnoc_top__ALL.a`
 2. `scripts/build_sim.sh`
+   - auto-applies `patches/gpgpu-sim-openbpu-integration.patch` when needed
    - compiles `noc_if.cpp`
    - compiles `gpgpu_sim_noc_adapter.cpp`
    - compiles `noc_verilator_wrapper.cpp`
@@ -122,8 +146,9 @@ The remaining integration blocker is operational rather than architectural:
 - Remote Ubuntu builds require regenerating Verilator outputs on the remote host
   to avoid host-version mismatches between generated headers and the local
   Verilator runtime
-- If the project is copied by `rsync` instead of `git clone`, `setup_environment`
-  may emit non-fatal git-metadata errors because `gpgpu-sim/.git` is absent
+- The current Verilator wrapper still serializes request injection aggressively
+  to match observed RTL behavior; this preserves liveness better than naive
+  multi-source driving, but currently limits throughput substantially
 
 ## Next research step
 

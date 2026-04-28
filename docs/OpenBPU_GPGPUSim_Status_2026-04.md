@@ -13,6 +13,8 @@ As of 2026-04-28, the end-to-end framework is partially operational:
 - Rodinia `backprop` can run on the remote Ubuntu server with
   `-network_mode 3`.
 - The OpenBPU backend prints packet latency, hop count, and throughput stats.
+- GPGPU-Sim submodule changes are preserved as an in-repo patch snapshot and
+  can now be auto-applied by the build script.
 
 However, the current request-network backend is not yet performance-correct:
 
@@ -141,6 +143,7 @@ NOC_FORCE_BUILD_NOC=1 ./scripts/build_sim.sh local
 Verified results:
 
 - Chisel generation succeeds
+- NoC metadata is emitted to `generated/openbpu_noc_meta.env`
 - Verilator model archive is generated
 - wrapper static library is generated
 - GPGPU-Sim links successfully against the wrapper and Verilator model

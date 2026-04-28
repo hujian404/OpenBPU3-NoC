@@ -1,6 +1,7 @@
 package openbpu
 
 import chisel3._
+import chisel3.util.log2Ceil
 
 case class NoCParams(
   // 拓扑参数
@@ -28,6 +29,10 @@ case class NoCParams(
   val numSMRouterPortsOut: Int = numMCs
   val numMCRouterPortsIn: Int = numSMClusters
   val numMCRouterPortsOut: Int = numL2SlicesPerMC
+  val vcWidth: Int = log2Ceil(numVCs.max(1))
+  val destWidth: Int = log2Ceil(numSMs.max(numL2Slices).max(1))
+  val flitHeaderWidth: Int = 2 + 1 + vcWidth + destWidth
+  val flitDataWidth: Int = Math.max(1, flitWidth - flitHeaderWidth)
 }
 
 // 默认参数配置
