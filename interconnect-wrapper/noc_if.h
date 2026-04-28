@@ -40,6 +40,7 @@ struct NocStatsSnapshot {
   uint64_t current_cycle;
   uint64_t packets_injected;
   uint64_t packets_delivered;
+  uint64_t inflight_packets;
   uint64_t bytes_injected;
   uint64_t bytes_delivered;
   uint64_t total_latency_cycles;

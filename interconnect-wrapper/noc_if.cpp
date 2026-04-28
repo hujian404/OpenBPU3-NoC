@@ -28,6 +28,7 @@ NocStatsSnapshot::NocStatsSnapshot()
     : current_cycle(0),
       packets_injected(0),
       packets_delivered(0),
+      inflight_packets(0),
       bytes_injected(0),
       bytes_delivered(0),
       total_latency_cycles(0),
@@ -130,6 +131,7 @@ NocStatsSnapshot NocIf::stats() const {
   snapshot.current_cycle = current_cycle_;
   snapshot.packets_injected = packets_injected_;
   snapshot.packets_delivered = packets_delivered_;
+  snapshot.inflight_packets = inflight_.size();
   snapshot.bytes_injected = bytes_injected_;
   snapshot.bytes_delivered = bytes_delivered_;
   snapshot.total_latency_cycles = total_latency_cycles_;
@@ -148,6 +150,7 @@ void NocIf::print_stats(std::ostream& os) const {
   os << "current_cycle=" << snapshot.current_cycle << '\n';
   os << "packets_injected=" << snapshot.packets_injected << '\n';
   os << "packets_delivered=" << snapshot.packets_delivered << '\n';
+  os << "inflight_packets=" << snapshot.inflight_packets << '\n';
   os << "bytes_injected=" << snapshot.bytes_injected << '\n';
   os << "bytes_delivered=" << snapshot.bytes_delivered << '\n';
   os << "stalled_pushes=" << snapshot.stalled_pushes << '\n';

@@ -39,24 +39,24 @@ class RouterOutputMux(params: NoCParams, numInputs: Int, numOutputs: Int) extend
     val sel = Input(Vec(numOutputs, Vec(params.numVCs, UInt(log2Ceil(numInputs).W))))
     val out = Vec(numOutputs, Vec(params.numVCs, Decoupled(new Flit(params))))
   })
-  
-  // 为每个输出端口创建一个OutputMux
-  val outputMuxes = Seq.fill(numOutputs)(Module(new OutputMux(params, numInputs)))
-  
+
   for (port <- 0 until numOutputs) {
-    // 连接输入
-    for (i <- 0 until numInputs) {
-      for (vc <- 0 until params.numVCs) {
-        outputMuxes(port).io.in(i)(vc) <> io.in(i)(vc)
-      }
-    }
-    
-    // 连接选择信号
-    outputMuxes(port).io.sel := io.sel(port)
-    
-    // 连接输出
     for (vc <- 0 until params.numVCs) {
-      io.out(port)(vc) <> outputMuxes(port).io.out(vc)
+      val selected = io.sel(port)(vc)
+      io.out(port)(vc).bits := Mux1H(Seq.tabulate(numInputs) { i =>
+        (selected === i.U) -> io.in(i)(vc).bits
+      })
+      io.out(port)(vc).valid := Mux1H(Seq.tabulate(numInputs) { i =>
+        (selected === i.U) -> io.in(i)(vc).valid
+      })
+    }
+  }
+
+  for (i <- 0 until numInputs) {
+    for (vc <- 0 until params.numVCs) {
+      io.in(i)(vc).ready := VecInit.tabulate(numOutputs) { port =>
+        (io.sel(port)(vc) === i.U) && io.out(port)(vc).ready
+      }.asUInt.orR
     }
   }
 }

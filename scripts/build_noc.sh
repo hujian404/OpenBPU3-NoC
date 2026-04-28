@@ -19,6 +19,7 @@ SKIP_CHISEL="${NOC_SKIP_CHISEL:-0}"
 GENERATOR_MAIN="${NOC_GENERATOR_MAIN:-openbpu.NoCGenerator}"
 
 mkdir -p "${RTL_DIR}" "${VERILATOR_DIR}"
+rm -rf "${VERILATOR_DIR}/obj_dir"
 
 if [[ ! -f "${RTL_FILE}" && -f "${RTL_FALLBACK_DIR}/${MODULE_NAME}.sv" ]]; then
   RTL_FILE="${RTL_FALLBACK_DIR}/${MODULE_NAME}.sv"
@@ -28,7 +29,14 @@ if [[ "${SKIP_CHISEL}" != "1" ]]; then
   echo "[build_noc] Generating Chisel/SystemVerilog"
   (
     cd "${ROOT_DIR}"
-    sbt "runMain ${GENERATOR_MAIN}"
+    if command -v sbt >/dev/null 2>&1; then
+      sbt --batch "runMain ${GENERATOR_MAIN}"
+    elif command -v mill >/dev/null 2>&1; then
+      mill --no-server MyNoC.runMain "${GENERATOR_MAIN}"
+    else
+      echo "[build_noc] Neither sbt nor mill is available in PATH" >&2
+      exit 1
+    fi
   )
 fi
 
@@ -159,5 +167,10 @@ verilator \
   --top-module "${TOP_NAME}" \
   -I"$(dirname "${RTL_FILE}")" \
   -Mdir "${VERILATOR_DIR}/obj_dir"
+
+echo "[build_noc] Building Verilator static libraries"
+make -C "${VERILATOR_DIR}/obj_dir" -f "V${TOP_NAME}.mk" \
+  "V${TOP_NAME}__ALL.a" \
+  -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)"
 
 echo "[build_noc] Done"

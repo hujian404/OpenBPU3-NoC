@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include <deque>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,7 @@ class NocVerilatorWrapper : public NocIf {
     uint32_t max_pending_per_output;
     uint32_t reset_cycles;
     uint32_t fixed_hops;
+    uint32_t min_input_hold_cycles;
     std::string trace_path;
 
     Config();
@@ -81,6 +83,14 @@ class NocVerilatorWrapper : public NocIf {
   std::vector<std::deque<EncodedPacket> > ingress_queues_;
   std::vector<std::deque<EgressPacket> > egress_queues_;
   std::vector<bool> accepted_inputs_;
+  std::vector<uint32_t> input_presentation_cycles_;
+  std::vector<bool> previous_output_valid_;
+  std::vector<uint64_t> previous_output_flit_;
+  std::set<uint64_t> seen_output_packet_ids_;
+  int32_t active_source_node_;
+  uint64_t active_tracking_id_;
+  bool active_packet_accepted_;
+  uint32_t next_source_rr_;
 };
 
 }  // namespace openbpu

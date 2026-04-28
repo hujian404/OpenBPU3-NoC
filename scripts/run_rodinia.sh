@@ -10,6 +10,10 @@ GPGPUSIM_CONFIG_DIR="${GPGPUSIM_CONFIG_DIR:-${ROOT_DIR}/gpgpu-sim/configs/tested
 STATS_FILE="${STATS_FILE:-${ROOT_DIR}/run/${RODINIA_APP}_noc_stats.log}"
 CUDA_INSTALL_PATH="${CUDA_INSTALL_PATH:-/usr/local/cuda-11.8}"
 RODINIA_ROOT="${ROOT_DIR}/tests/cuda/gpu-rodinia-3.1"
+GPGPUSIM_NETWORK_MODE="${GPGPUSIM_NETWORK_MODE:-3}"
+OPENBPU_CONFIG_EXTRA="${OPENBPU_CONFIG_EXTRA:-}"
+GPGPUSIM_MAX_CYCLE="${GPGPUSIM_MAX_CYCLE:-}"
+GPGPUSIM_DEADLOCK_DETECT="${GPGPUSIM_DEADLOCK_DETECT:-}"
 
 mkdir -p "$(dirname "${STATS_FILE}")"
 
@@ -27,7 +31,7 @@ sync_remote() {
 
 remote_run() {
   ssh "${REMOTE_HOST}" \
-    "cd ${REMOTE_DIR} && RODINIA_APP='${RODINIA_APP}' RODINIA_ARGS='${RODINIA_ARGS}' GPGPUSIM_CONFIG_DIR='${GPGPUSIM_CONFIG_DIR}' STATS_FILE='${STATS_FILE}' scripts/run_rodinia.sh local"
+    "cd ${REMOTE_DIR} && RODINIA_APP='${RODINIA_APP}' RODINIA_ARGS='${RODINIA_ARGS}' GPGPUSIM_CONFIG_DIR='${GPGPUSIM_CONFIG_DIR}' STATS_FILE='${STATS_FILE}' GPGPUSIM_NETWORK_MODE='${GPGPUSIM_NETWORK_MODE}' OPENBPU_CONFIG_EXTRA='${OPENBPU_CONFIG_EXTRA}' scripts/run_rodinia.sh local"
 }
 
 local_run() {
@@ -96,22 +100,60 @@ EOF
   export OPENBPU_NOC_STATS_FILE="${STATS_FILE}"
   export OPENBPU_NOC_PRINT_STATS=1
   # shellcheck disable=SC1091
+  set +e
+  set +u
+  # shellcheck disable=SC1091
   source "${ROOT_DIR}/gpgpu-sim/setup_environment" release
+  local setup_status=$?
+  set -u
+  set -e
+  if [[ ${setup_status} -ne 0 ]]; then
+    echo "Warning: setup_environment returned ${setup_status}; continuing with current environment" >&2
+  fi
 
   cp "${GPGPUSIM_CONFIG_DIR}/gpgpusim.config" "$(dirname "${binary}")/gpgpusim.config"
   cp "${GPGPUSIM_CONFIG_DIR}"/accelwattch*.xml "$(dirname "${binary}")/"
   cp "${GPGPUSIM_CONFIG_DIR}"/config_volta*.icnt "$(dirname "${binary}")/"
+  if grep -q '^-network_mode ' "$(dirname "${binary}")/gpgpusim.config"; then
+    sed -i.bak "s/^-network_mode .*/-network_mode ${GPGPUSIM_NETWORK_MODE}/" \
+      "$(dirname "${binary}")/gpgpusim.config"
+  else
+    printf '\n-network_mode %s\n' "${GPGPUSIM_NETWORK_MODE}" >> \
+      "$(dirname "${binary}")/gpgpusim.config"
+  fi
+  if [[ -n "${OPENBPU_CONFIG_EXTRA}" ]]; then
+    printf '\n# OpenBPU backend overrides\n%s\n' "${OPENBPU_CONFIG_EXTRA}" >> \
+      "$(dirname "${binary}")/gpgpusim.config"
+  fi
+  if [[ -n "${GPGPUSIM_MAX_CYCLE}" ]]; then
+    if grep -q '^-gpgpu_max_cycle ' "$(dirname "${binary}")/gpgpusim.config"; then
+      sed -i.bak "s/^-gpgpu_max_cycle .*/-gpgpu_max_cycle ${GPGPUSIM_MAX_CYCLE}/" \
+        "$(dirname "${binary}")/gpgpusim.config"
+    else
+      printf '\n-gpgpu_max_cycle %s\n' "${GPGPUSIM_MAX_CYCLE}" >> \
+        "$(dirname "${binary}")/gpgpusim.config"
+    fi
+  fi
+  if [[ -n "${GPGPUSIM_DEADLOCK_DETECT}" ]]; then
+    if grep -q '^-gpgpu_deadlock_detect ' "$(dirname "${binary}")/gpgpusim.config"; then
+      sed -i.bak "s/^-gpgpu_deadlock_detect .*/-gpgpu_deadlock_detect ${GPGPUSIM_DEADLOCK_DETECT}/" \
+        "$(dirname "${binary}")/gpgpusim.config"
+    else
+      printf '\n-gpgpu_deadlock_detect %s\n' "${GPGPUSIM_DEADLOCK_DETECT}" >> \
+        "$(dirname "${binary}")/gpgpusim.config"
+    fi
+  fi
   (
     cd "$(dirname "${binary}")"
     if [[ -n "${RODINIA_ARGS}" ]]; then
-      "${binary}" ${RODINIA_ARGS}
+      "${binary}" ${RODINIA_ARGS} 2>&1
     else
-      "${binary}" ${default_args}
+      "${binary}" ${default_args} 2>&1
     fi
   ) | tee "${STATS_FILE}"
 
   echo "---- OpenBPU NoC summary ----"
-  grep -E 'Req_Network_injected_packets_per_cycle|Reply_Network_injected_packets_per_cycle|gpgpu_simulation_time|GPGPU-Sim: \*\*\* exit detected \*\*\*' "${STATS_FILE}" || true
+  grep -E 'Req_Network__packets_(injected|delivered)|Req_Network__avg_latency_cycles|Req_Network__throughput_packets_per_cycle|Reply_Network__packets_(injected|delivered)|Reply_Network__avg_latency_cycles|Reply_Network__throughput_packets_per_cycle|gpgpu_simulation_time|GPGPU-Sim: \*\*\* exit detected \*\*\*' "${STATS_FILE}" || true
 }
 
 mode="${1:-local}"

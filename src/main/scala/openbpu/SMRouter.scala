@@ -60,33 +60,19 @@ class SMRouter(params: NoCParams) extends Module {
   val vaInputVCRegs = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(
     RegInit(0.U(log2Ceil(params.numVCs).W))
   ))
+  val vaInputFlitRegs = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(
+    RegInit(0.U.asTypeOf(new Flit(params)))
+  ))
   val vaInputValids = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(RegInit(false.B)))
-  
-  // 为输入缓冲器输出提供ready信号
-  // 当前实现中，RC 输入寄存器始终可以接收新的 flit，具体的反压由链路 credit 和后级队列提供。
-  for (i <- 0 until params.numSMRouterPortsIn) {
-    for (vc <- 0 until params.numVCs) {
-      inputBuffers(i).io.out(vc).ready := true.B
-    }
-  }
-  
-  // 连接BW输出到RC输入寄存器
-  for (i <- 0 until params.numSMRouterPortsIn) {
-    for (vc <- 0 until params.numVCs) {
-      when (inputBuffers(i).io.out(vc).fire) {
-        rcInputFlits(i)(vc) := bwOutFlits(i)(vc)
-        rcInputValids(i)(vc) := true.B
-      } .otherwise {
-        rcInputValids(i)(vc) := false.B
-      }
-    }
-  }
   
   // ===========================================================================
   // 2. RC: Route Compute - 路由计算阶段
   // ===========================================================================
   // 创建路由计算模块
   val rc = Module(new SMRouterRC(params))
+  val rcSelectedVC = Seq.fill(params.numSMRouterPortsIn)(Wire(UInt(log2Ceil(params.numVCs).W)))
+  val rcHasValidFlit = Seq.fill(params.numSMRouterPortsIn)(Wire(Bool()))
+  val rcConsume = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(Wire(Bool())))
   
   // 连接RC输入
   for (i <- 0 until params.numSMRouterPortsIn) {
@@ -104,10 +90,31 @@ class SMRouter(params: NoCParams) extends Module {
 
     rc.io.in(i).bits := selectedFlit
     rc.io.in(i).valid := hasValidFlit
+    rcSelectedVC(i) := selectedVC
+    rcHasValidFlit(i) := hasValidFlit
 
     // 成功发送后更新轮询指针
     when (rc.io.in(i).fire) {
       rcRrPtr(i) := Mux(selectedVC === (params.numVCs - 1).U, 0.U, selectedVC + 1.U)
+    }
+
+    for (vc <- 0 until params.numVCs) {
+      rcConsume(i)(vc) := rc.io.in(i).fire && (selectedVC === vc.U)
+    }
+  }
+
+  // RC 输入寄存器只在槽位空闲时从 BW 接新 flit，并在被 RC 消费前保持稳定。
+  for (i <- 0 until params.numSMRouterPortsIn) {
+    for (vc <- 0 until params.numVCs) {
+      val slotWillFree = rcConsume(i)(vc)
+      inputBuffers(i).io.out(vc).ready := !rcInputValids(i)(vc) || slotWillFree
+
+      when (inputBuffers(i).io.out(vc).fire) {
+        rcInputFlits(i)(vc) := bwOutFlits(i)(vc)
+        rcInputValids(i)(vc) := true.B
+      } .elsewhen (slotWillFree) {
+        rcInputValids(i)(vc) := false.B
+      }
     }
   }
 
@@ -118,11 +125,7 @@ class SMRouter(params: NoCParams) extends Module {
 
   // 将 RC 的输出组合入队（放在单独循环中以避免在上方循环里引用未定义的 rcOutQueues）
   for (i <- 0 until params.numSMRouterPortsIn) {
-    val vcValids = VecInit.tabulate(params.numVCs)(vc => rcInputValids(i)(vc))
-    val hasValidFlit = vcValids.asUInt.orR
-    val masked = VecInit.tabulate(params.numVCs)(k => vcValids(k) && (k.U >= rcRrPtr(i)))
-    val hasMasked = masked.asUInt.orR
-    val selectedVC = Mux(hasMasked, PriorityEncoder(masked.asUInt), PriorityEncoder(vcValids.asUInt))
+    val selectedVC = rcSelectedVC(i)
     val selectedFlit = Mux1H(Seq.tabulate(params.numVCs) { vc => (selectedVC === vc.U) -> rcInputFlits(i)(vc) })
 
     rcOutQueues(i).io.enq.bits.flit := selectedFlit
@@ -132,23 +135,6 @@ class SMRouter(params: NoCParams) extends Module {
     rc.io.out(i).ready := rcOutQueues(i).io.enq.ready
   }
   
-  // 将 RC 输出队列的项 dequeue 到 VA 输入寄存器（通过匹配 inVC）
-  for (i <- 0 until params.numSMRouterPortsIn) {
-    val deqReady = WireInit(false.B)
-    for (vc <- 0 until params.numVCs) {
-      val headMatch = rcOutQueues(i).io.deq.valid && (rcOutQueues(i).io.deq.bits.inVC === vc.U)
-      when (headMatch) {
-        vaInputPortRegs(i)(vc) := rcOutQueues(i).io.deq.bits.outPort
-        vaInputVCRegs(i)(vc) := rcOutQueues(i).io.deq.bits.inVC
-        vaInputValids(i)(vc) := true.B
-        deqReady := true.B
-      } .otherwise {
-        vaInputValids(i)(vc) := false.B
-      }
-    }
-    rcOutQueues(i).io.deq.ready := deqReady
-  }
-
   // ========== VA -> SA 的 dequeue 到 SA 寄存器 ==========
   // 流水线寄存器：VA → SA
   val saInputPortRegs = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(
@@ -157,26 +143,14 @@ class SMRouter(params: NoCParams) extends Module {
   val saInputVCRegs = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(
     RegInit(0.U(log2Ceil(params.numVCs).W))
   ))
+  val saInputFlitRegs = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(
+    RegInit(0.U.asTypeOf(new Flit(params)))
+  ))
   val saInputValids = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(RegInit(false.B)))
 
   // 为 VA -> SA 准备的输出队列（在稍后由 VA 阶段入队）
   val vaOutQueues = Seq.tabulate(params.numSMRouterPortsIn) { i =>
     Module(new Queue(new VAToSABundle(params, params.numSMRouterPortsOut), 2))
-  }
-  for (i <- 0 until params.numSMRouterPortsIn) {
-    val deqReady = WireInit(false.B)
-    for (vc <- 0 until params.numVCs) {
-      val headMatch = vaOutQueues(i).io.deq.valid && (vaOutQueues(i).io.deq.bits.inVC === vc.U)
-      when (headMatch) {
-        saInputPortRegs(i)(vc) := vaOutQueues(i).io.deq.bits.outPort
-        saInputVCRegs(i)(vc) := vaOutQueues(i).io.deq.bits.outVC
-        saInputValids(i)(vc) := true.B
-        deqReady := true.B
-      } .otherwise {
-        saInputValids(i)(vc) := false.B
-      }
-    }
-    vaOutQueues(i).io.deq.ready := deqReady
   }
   
   // ===========================================================================
@@ -184,6 +158,7 @@ class SMRouter(params: NoCParams) extends Module {
   // ===========================================================================
   // 创建VC分配模块
   val va = Module(new VCAllocator(params, params.numSMRouterPortsIn))
+  val vaConsume = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(Wire(Bool())))
 
   // 连接VA输入：当输入有效时，向所有输出VC发出请求，由分配器在输出VC之间选择
   for (i <- 0 until params.numSMRouterPortsIn) {
@@ -216,7 +191,9 @@ class SMRouter(params: NoCParams) extends Module {
 
     val outPortSel = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> vaInputPortRegs(i)(vc) })
     val outVCSel = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> selOutPerInVC(vc) })
+    val flitSel = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> vaInputFlitRegs(i)(vc) })
 
+    vaOutQueues(i).io.enq.bits.flit := flitSel
     vaOutQueues(i).io.enq.bits.outPort := outPortSel
     vaOutQueues(i).io.enq.bits.inVC := selInVC
     vaOutQueues(i).io.enq.bits.outVC := outVCSel
@@ -224,6 +201,53 @@ class SMRouter(params: NoCParams) extends Module {
 
     when (vaOutQueues(i).io.enq.fire) {
       vaRrPtr(i) := Mux(selInVC === (params.numVCs - 1).U, 0.U, selInVC + 1.U)
+    }
+
+    for (vc <- 0 until params.numVCs) {
+      vaConsume(i)(vc) := vaOutQueues(i).io.enq.fire && (selInVC === vc.U)
+    }
+  }
+
+  // 将 RC 输出队列的项 dequeue 到 VA 输入寄存器，并在被 VA 消费前保持。
+  for (i <- 0 until params.numSMRouterPortsIn) {
+    val headVC = rcOutQueues(i).io.deq.bits.inVC
+    val canAcceptHead = Mux1H(Seq.tabulate(params.numVCs) { vc =>
+      (headVC === vc.U) -> (!vaInputValids(i)(vc) || vaConsume(i)(vc))
+    })
+    rcOutQueues(i).io.deq.ready := rcOutQueues(i).io.deq.valid && canAcceptHead
+
+    for (vc <- 0 until params.numVCs) {
+      val refill = rcOutQueues(i).io.deq.fire && (headVC === vc.U)
+      when (refill) {
+        vaInputPortRegs(i)(vc) := rcOutQueues(i).io.deq.bits.outPort
+        vaInputVCRegs(i)(vc) := rcOutQueues(i).io.deq.bits.inVC
+        vaInputFlitRegs(i)(vc) := rcOutQueues(i).io.deq.bits.flit
+        vaInputValids(i)(vc) := true.B
+      } .elsewhen (vaConsume(i)(vc)) {
+        vaInputValids(i)(vc) := false.B
+      }
+    }
+  }
+
+  // VA -> SA：保存 flit 与选择结果，直到 SA 消费。
+  val saConsume = Seq.fill(params.numSMRouterPortsIn)(Seq.fill(params.numVCs)(Wire(Bool())))
+  for (i <- 0 until params.numSMRouterPortsIn) {
+    val headVC = vaOutQueues(i).io.deq.bits.inVC
+    val canAcceptHead = Mux1H(Seq.tabulate(params.numVCs) { vc =>
+      (headVC === vc.U) -> (!saInputValids(i)(vc) || saConsume(i)(vc))
+    })
+    vaOutQueues(i).io.deq.ready := vaOutQueues(i).io.deq.valid && canAcceptHead
+
+    for (vc <- 0 until params.numVCs) {
+      val refill = vaOutQueues(i).io.deq.fire && (headVC === vc.U)
+      when (refill) {
+        saInputPortRegs(i)(vc) := vaOutQueues(i).io.deq.bits.outPort
+        saInputVCRegs(i)(vc) := vaOutQueues(i).io.deq.bits.outVC
+        saInputFlitRegs(i)(vc) := vaOutQueues(i).io.deq.bits.flit
+        saInputValids(i)(vc) := true.B
+      } .elsewhen (saConsume(i)(vc)) {
+        saInputValids(i)(vc) := false.B
+      }
     }
   }
 
@@ -270,7 +294,7 @@ class SMRouter(params: NoCParams) extends Module {
     val anyGrant = grantVec.asUInt.orR
     val selInVC = Mux(hasMasked, PriorityEncoder(masked.asUInt), PriorityEncoder(grantVec.asUInt))
 
-    val selFlit = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> rcInputFlits(i)(vc) })
+    val selFlit = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> saInputFlitRegs(i)(vc) })
     val selOutPort = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> saInputPortRegs(i)(vc) })
     val selOutVC = Mux1H(Seq.tabulate(params.numVCs) { vc => (selInVC === vc.U) -> saInputVCRegs(i)(vc) })
 
@@ -282,6 +306,10 @@ class SMRouter(params: NoCParams) extends Module {
 
     when (saOutQueues(i).io.enq.fire) {
       saRrPtr(i) := Mux(selInVC === (params.numVCs - 1).U, 0.U, selInVC + 1.U)
+    }
+
+    for (vc <- 0 until params.numVCs) {
+      saConsume(i)(vc) := saOutQueues(i).io.enq.fire && (selInVC === vc.U)
     }
   }
 

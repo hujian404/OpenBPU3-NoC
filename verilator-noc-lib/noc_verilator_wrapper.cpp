@@ -50,7 +50,8 @@ NocVerilatorWrapper::Config::Config()
       max_pending_per_input(8),
       max_pending_per_output(64),
       reset_cycles(5),
-      fixed_hops(2) {}
+      fixed_hops(2),
+      min_input_hold_cycles(3) {}
 
 NocVerilatorWrapper::NocVerilatorWrapper(const Config& config)
     : NocIf("openbpu-verilator"),
@@ -59,7 +60,14 @@ NocVerilatorWrapper::NocVerilatorWrapper(const Config& config)
       top_(0),
       ingress_queues_(config.num_input_nodes),
       egress_queues_(config.num_output_nodes),
-      accepted_inputs_(config.num_input_nodes, false) {
+      accepted_inputs_(config.num_input_nodes, false),
+      input_presentation_cycles_(config.num_input_nodes, 0),
+      previous_output_valid_(config.num_output_nodes, false),
+      previous_output_flit_(config.num_output_nodes, 0),
+      active_source_node_(-1),
+      active_tracking_id_(0),
+      active_packet_accepted_(false),
+      next_source_rr_(0) {
   if (config_.packet_bits > 64) {
     throw std::invalid_argument(
         "Current wrapper encodes a single packet into one 64-bit flit");
@@ -154,12 +162,29 @@ void NocVerilatorWrapper::DriveInputs() {
   std::memset(&top_->in_valid, 0, valid_words * sizeof(uint32_t));
   std::memset(&top_->out_ready, 0xff, ready_words * sizeof(uint32_t));
 
+  if (active_source_node_ < 0) {
+    for (uint32_t offset = 0; offset < config_.num_input_nodes; ++offset) {
+      const uint32_t candidate = (next_source_rr_ + offset) % config_.num_input_nodes;
+      if (ingress_queues_[candidate].empty()) {
+        continue;
+      }
+      active_source_node_ = static_cast<int32_t>(candidate);
+      active_tracking_id_ = ingress_queues_[candidate].front().tracking_id;
+      active_packet_accepted_ = false;
+      input_presentation_cycles_[candidate] = 0;
+      break;
+    }
+  }
+
   for (uint32_t node = 0; node < config_.num_input_nodes; ++node) {
     accepted_inputs_[node] = false;
-    if (ingress_queues_[node].empty()) {
+    if (static_cast<int32_t>(node) != active_source_node_ ||
+        ingress_queues_[node].empty() || active_packet_accepted_) {
+      input_presentation_cycles_[node] = 0;
       continue;
     }
     const EncodedPacket& encoded = ingress_queues_[node].front();
+    ++input_presentation_cycles_[node];
     SetFlatBit(&top_->in_valid, node, true);
     SetFlatField(&top_->in_packet, node * config_.packet_bits,
                  config_.packet_bits, EncodeFlitBits(encoded));
@@ -181,15 +206,22 @@ void NocVerilatorWrapper::StepClock() {
 
 void NocVerilatorWrapper::ConsumeAcceptedInputs() {
   for (uint32_t node = 0; node < config_.num_input_nodes; ++node) {
-    if (accepted_inputs_[node] && !ingress_queues_[node].empty()) {
+    if (accepted_inputs_[node] && !ingress_queues_[node].empty() &&
+        input_presentation_cycles_[node] >= config_.min_input_hold_cycles) {
       ingress_queues_[node].pop_front();
+      input_presentation_cycles_[node] = 0;
+      if (static_cast<int32_t>(node) == active_source_node_) {
+        active_packet_accepted_ = true;
+      }
     }
   }
 }
 
 void NocVerilatorWrapper::CaptureOutputs() {
   for (uint32_t node = 0; node < config_.num_output_nodes; ++node) {
-    if (!GetFlatBit(&top_->out_valid, node)) {
+    const bool is_valid = GetFlatBit(&top_->out_valid, node);
+    if (!is_valid) {
+      previous_output_valid_[node] = false;
       continue;
     }
     if (egress_queues_[node].size() >= config_.max_pending_per_output) {
@@ -199,15 +231,35 @@ void NocVerilatorWrapper::CaptureOutputs() {
     const uint64_t flit_bits =
         GetFlatField(&top_->out_packet, node * config_.packet_bits,
                      config_.packet_bits);
+    if (previous_output_valid_[node] &&
+        previous_output_flit_[node] == flit_bits) {
+      continue;
+    }
+
     const uint64_t data_bits =
         flit_bits >> (2u + 1u + config_.vc_bits + config_.dest_bits);
     const uint32_t tracking_id = DecodeTrackingId(data_bits);
+    if (seen_output_packet_ids_.count(tracking_id) != 0u) {
+      previous_output_valid_[node] = true;
+      previous_output_flit_[node] = flit_bits;
+      continue;
+    }
 
     EgressPacket egress;
     egress.packet.packet_id = tracking_id;
     egress.packet.dst_id = node;
     egress.hop_count = config_.fixed_hops;
     egress_queues_[node].push_back(egress);
+    seen_output_packet_ids_.insert(tracking_id);
+    if (active_source_node_ >= 0 && tracking_id == active_tracking_id_) {
+      next_source_rr_ =
+          (static_cast<uint32_t>(active_source_node_) + 1u) % config_.num_input_nodes;
+      active_source_node_ = -1;
+      active_tracking_id_ = 0;
+      active_packet_accepted_ = false;
+    }
+    previous_output_valid_[node] = true;
+    previous_output_flit_[node] = flit_bits;
   }
 }
 

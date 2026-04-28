@@ -12,6 +12,7 @@ class RCToVABundle(params: NoCParams, numOutputs: Int) extends Bundle {
 
 // VA -> SA 传递的数据结构：记录为某个输入 VC 选中的输出端口和输出 VC
 class VAToSABundle(params: NoCParams, numOutputs: Int) extends Bundle {
+  val flit    = new Flit(params)
   val outPort = UInt(log2Ceil(numOutputs).W)
   val inVC    = UInt(log2Ceil(params.numVCs).W)
   val outVC   = UInt(log2Ceil(params.numVCs).W)
@@ -24,5 +25,4 @@ class SAToSTBundle(params: NoCParams, numOutputs: Int) extends Bundle {
   val inVC    = UInt(log2Ceil(params.numVCs).W)
   val outVC   = UInt(log2Ceil(params.numVCs).W)
 }
-
 
