@@ -149,6 +149,35 @@ The remaining integration blocker is operational rather than architectural:
 - The current Verilator wrapper still serializes request injection aggressively
   to match observed RTL behavior; this preserves liveness better than naive
   multi-source driving, but currently limits throughput substantially
+- A standalone probe now shows:
+  - single-packet delivery succeeds
+  - light round-robin multi-source delivery succeeds
+  - hotspot multi-packet traffic still loses forward progress under contention
+  - hotspot sweeps indicate the current cliff appears when burst depth grows,
+    not from contention alone
+  - light hotspot cases can report full delivery only because the wrapper is
+    suppressing duplicate output packet IDs
+  - wrapper input-hold sweeps show the current behavior is heuristic-sensitive;
+    the repository now defaults to `hold=5`, which locally performs slightly
+    better than the older `hold=3`, but neither is protocol-clean
+- Remote bounded `backprop` validation on `10.156.154.31` now shows a much
+  better but still incomplete request path:
+  - `Req_Network__packets_injected = 1462`
+  - `Req_Network__packets_delivered = 821`
+  - `outstanding_payloads = 642`
+  - `hold=3` and `hold=5` produced the same bounded interconnect result
+- `scripts/run_noc_probe.sh` was adjusted to avoid unconditionally compiling
+  `verilated_threads.cpp`, which kept the standalone probe from building on the
+  server's Verilator `4.204`
+- The repaired server-side probe now shows:
+  - `single` traffic still delivers correctly in `18` cycles
+  - `4x4 hotspot` with `hold=3/5` can report `16/16` delivery
+  - but that apparent success still includes `27` duplicate-output suppressions
+  - therefore probe-level full delivery does not yet imply full-system request
+    correctness
+- Chisel diagnostics now also show two distinct RTL-facing issues:
+  - natural one-cycle hotspot bursts can still lose packets
+  - wrapper-compatible held-valid hotspot bursts can surface duplicate packets
 
 ## Next research step
 
