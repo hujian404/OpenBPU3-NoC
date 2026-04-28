@@ -53,7 +53,7 @@ Validated today:
 - Chisel compile and regression flow
 - Verilator NoC build flow
 - GPGPU-Sim build with the OpenBPU wrapper
-- Remote Ubuntu execution on `hujian@10.156.154.31`
+- Remote Ubuntu execution on the configured server account
 - Rodinia `backprop` under `-network_mode 3`
 
 Current limitation:
@@ -67,6 +67,62 @@ Current limitation:
 
 For the most recent measured results, see
 [`docs/OpenBPU_GPGPUSim_Status_2026-04.md`](docs/OpenBPU_GPGPUSim_Status_2026-04.md).
+
+## Chisel Environment
+
+The RTL and test flow in this repository is based on the following toolchain:
+
+- JDK: 17
+- sbt: 1.11.4
+- Scala: 2.13.12
+- Chisel: 6.2.0
+- chiseltest: 6.0.0
+- mill: optional alternative frontend for Scala/Chisel tasks
+
+The authoritative versions come from:
+
+- `project/build.properties`
+- `build.sbt`
+- `build.sc`
+
+Recommended local setup:
+
+```bash
+java -version
+sbt --version
+```
+
+You should see a Java 17 runtime and sbt 1.11.x.
+
+If you are setting up a fresh machine, make sure:
+
+- `JAVA_HOME` points to a JDK 17 installation
+- `sbt` is on `PATH`
+- `verilator` is on `PATH` if you want to build the C++ NoC backend
+- CUDA is only required for the full GPGPU-Sim and Rodinia flow, not for pure
+  Chisel compile/test work
+
+Minimal Chisel bring-up checklist:
+
+```bash
+git submodule update --init --recursive
+sbt compile
+sbt test
+sbt "runMain openbpu.NoCGenerator"
+```
+
+Optional `mill` equivalents:
+
+```bash
+mill --no-server MyNoC.test
+mill --no-server MyNoC.runMain openbpu.NoCGenerator
+```
+
+If `sbt` cannot resolve dependencies on a new machine, check:
+
+- outbound network access to Maven repositories
+- that the JDK is really Java 17, not Java 8 or Java 21
+- that Scala/Chisel versions are not being overridden by a local global config
 
 ## Quick Start
 
@@ -153,6 +209,12 @@ Typical flow:
 1. Sync the repository to the server.
 2. Build the NoC and GPGPU-Sim on the server.
 3. Run bounded Rodinia workloads and compare interconnect stats.
+
+Typical SSH entry:
+
+```bash
+ssh <your-remote-user>@<your-remote-host>
+```
 
 The server-side build/run details and measured results are tracked in:
 

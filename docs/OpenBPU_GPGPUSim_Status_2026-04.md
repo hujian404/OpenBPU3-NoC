@@ -119,7 +119,7 @@ This is intentional for now because the available RTL top-level is request-only
 
 Validated on:
 
-- host: `hujian@10.156.154.31`
+- host: configured remote Ubuntu server account
 - path: `/home/hujian/openbpu3-noc`
 - OS: Ubuntu
 - CUDA: `/usr/local/cuda-11.8`
@@ -182,7 +182,7 @@ the full GPGPU-Sim or Rodinia stack.
 
 ## Observed Metrics
 
-From the validated remote Ubuntu runs on `10.156.154.31`, using:
+From the validated remote Ubuntu runs on the configured server, using:
 
 ```bash
 RODINIA_APP=backprop \
@@ -327,7 +327,7 @@ for keeping the standalone probe reproducible across macOS and Ubuntu hosts.
 ### Remote probe observations
 
 After the script fix, the server-side standalone probe was re-run directly on
-`10.156.154.31`.
+the configured remote server.
 
 Single-packet probe:
 

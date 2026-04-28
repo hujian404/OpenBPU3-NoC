@@ -160,7 +160,7 @@ The remaining integration blocker is operational rather than architectural:
   - wrapper input-hold sweeps show the current behavior is heuristic-sensitive;
     the repository now defaults to `hold=5`, which locally performs slightly
     better than the older `hold=3`, but neither is protocol-clean
-- Remote bounded `backprop` validation on `10.156.154.31` now shows a much
+- Remote bounded `backprop` validation on the configured Ubuntu server now shows a much
   better but still incomplete request path:
   - `Req_Network__packets_injected = 1462`
   - `Req_Network__packets_delivered = 821`
