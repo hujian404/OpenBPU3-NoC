@@ -1,0 +1,556 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 95ca8e0..9a242d8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -14,6 +14,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
+ # GPGPU-Sim build option
+ option(GPGPUSIM_ENABLE_TRACE "Whether to enable GPGPU-Sim debug tracing" ON)
+ 
++set(OPENBPU_NOC_WRAPPER_LIB "" CACHE FILEPATH "Path to libopenbpu_noc_wrapper.a")
++set(OPENBPU_NOC_VERILATOR_MODEL_LIB "" CACHE FILEPATH "Path to Vnoc_top__ALL.a")
++
+ # GPGPU-Sim conditional build variable
+ set(GPGPUSIM_USE_POWER_MODEL OFF)
+ set(GPGPUSIM_USE_OPENCL OFF)
+@@ -83,6 +86,14 @@ if(GPGPUSIM_USE_POWER_MODEL)
+ target_link_libraries(cudart PUBLIC cuda ptxsim gpgpusim intersim accelwattch)
+ target_link_libraries(entrypoint PUBLIC cuda ptxsim gpgpusim intersim accelwattch)
+ endif()
++if(OPENBPU_NOC_WRAPPER_LIB)
++target_link_libraries(cudart PUBLIC ${OPENBPU_NOC_WRAPPER_LIB})
++target_link_libraries(entrypoint PUBLIC ${OPENBPU_NOC_WRAPPER_LIB})
++endif()
++if(OPENBPU_NOC_VERILATOR_MODEL_LIB)
++target_link_libraries(cudart PUBLIC ${OPENBPU_NOC_VERILATOR_MODEL_LIB})
++target_link_libraries(entrypoint PUBLIC ${OPENBPU_NOC_VERILATOR_MODEL_LIB})
++endif()
+ 
+ # TODO Conditionally build for Opencl?
+ # if(GPGPUSIM_USE_OPENCL)
+@@ -164,4 +175,4 @@ install(CODE "execute_process\(\
+ install(CODE "execute_process\(\
+     COMMAND ${CMAKE_COMMAND} -E create_symlink \
+     ${GPGPUSIM_INSTALL_PATH}/$<TARGET_FILE_NAME:cudart> \
+-    ${GPGPUSIM_INSTALL_PATH}/$<TARGET_FILE_NAME:cudart>.11.0\)")
+\ No newline at end of file
++    ${GPGPUSIM_INSTALL_PATH}/$<TARGET_FILE_NAME:cudart>.11.0\)")
+diff --git a/Makefile b/Makefile
+index 37dba01..abadc5a 100644
+--- a/Makefile
++++ b/Makefile
+@@ -59,6 +59,10 @@ endif
+ $(shell mkdir -p $(SIM_OBJ_FILES_DIR)/libcuda && echo "const char *g_gpgpusim_build_string=\"$(GPGPUSIM_BUILD)\";" > $(SIM_OBJ_FILES_DIR)/detailed_version)
+ 
+ LIBS = cuda-sim gpgpu-sim_uarch $(INTERSIM) gpgpusimlib
++OPENBPU_NOC_WRAPPER_LIB ?=
++OPENBPU_NOC_VERILATOR_MODEL_LIB ?=
++OPENBPU_NOC_VERILATED_RUNTIME_LIB ?=
++OPENBPU_NOC_EXTRA_LIBS = $(OPENBPU_NOC_WRAPPER_LIB) $(OPENBPU_NOC_VERILATOR_MODEL_LIB) $(OPENBPU_NOC_VERILATED_RUNTIME_LIB)
+ 
+ 
+ TARGETS =
+@@ -150,7 +154,7 @@ $(SIM_LIB_DIR)/libcudart.so: makedirs $(LIBS) cudalib
+ 			$(SIM_OBJ_FILES_DIR)/cuda-sim/decuda_pred_table/*.o \
+ 			$(SIM_OBJ_FILES_DIR)/gpgpu-sim/*.o \
+ 			$(SIM_OBJ_FILES_DIR)/$(INTERSIM)/*.o \
+-			$(SIM_OBJ_FILES_DIR)/*.o -lm -lz -lGL -pthread \
++			$(SIM_OBJ_FILES_DIR)/*.o $(OPENBPU_NOC_EXTRA_LIBS) -lm -lz -lGL -pthread \
+ 			$(MCPAT) \
+ 			-o $(SIM_LIB_DIR)/libcudart.so
+ 	if [ ! -f $(SIM_LIB_DIR)/libcudart.so.2 ]; then ln -s libcudart.so $(SIM_LIB_DIR)/libcudart.so.2; fi
+@@ -178,7 +182,7 @@ $(SIM_LIB_DIR)/libcudart.dylib: makedirs $(LIBS) cudalib
+ 			$(SIM_OBJ_FILES_DIR)/cuda-sim/decuda_pred_table/*.o \
+ 			$(SIM_OBJ_FILES_DIR)/gpgpu-sim/*.o \
+ 			$(SIM_OBJ_FILES_DIR)/$(INTERSIM)/*.o  \
+-			$(SIM_OBJ_FILES_DIR)/*.o -lm -lz -pthread \
++			$(SIM_OBJ_FILES_DIR)/*.o $(OPENBPU_NOC_EXTRA_LIBS) -lm -lz -pthread \
+ 			$(MCPAT) \
+ 			-o $(SIM_LIB_DIR)/libcudart.dylib
+ 
+@@ -189,7 +193,7 @@ $(SIM_LIB_DIR)/libOpenCL.so: makedirs $(LIBS) opencllib
+ 			$(SIM_OBJ_FILES_DIR)/cuda-sim/decuda_pred_table/*.o \
+ 			$(SIM_OBJ_FILES_DIR)/gpgpu-sim/*.o \
+ 			$(SIM_OBJ_FILES_DIR)/$(INTERSIM)/*.o \
+-			$(SIM_OBJ_FILES_DIR)/*.o -lm -lz -lGL -pthread \
++			$(SIM_OBJ_FILES_DIR)/*.o $(OPENBPU_NOC_EXTRA_LIBS) -lm -lz -lGL -pthread \
+ 			$(MCPAT) \
+ 			-o $(SIM_LIB_DIR)/libOpenCL.so 
+ 	if [ ! -f $(SIM_LIB_DIR)/libOpenCL.so.1 ]; then ln -s libOpenCL.so $(SIM_LIB_DIR)/libOpenCL.so.1; fi
+@@ -272,4 +276,3 @@ cleangpgpusim: cleandocs
+ 		./cuobjdump_to_ptxplus/lex.ptx_.c ./cuobjdump_to_ptxplus/ptx.output ./cuobjdump_to_ptxplus/ptx.tab.h cuobjdump_to_ptxplus/ptx.tab.h \
+ 		./cuobjdump_to_ptxplus/sass_lexer.cc ./cuobjdump_to_ptxplus/sass_parser.cc ./cuobjdump_to_ptxplus/sass_parser.hh \
+ 		./cuobjdump_to_ptxplus/ptx.tab.cc ./cuobjdump_to_ptxplus/*.output
+-
+diff --git a/setup_environment b/setup_environment
+index 5974ad0..4d7a2ad 100644
+--- a/setup_environment
++++ b/setup_environment
+@@ -7,9 +7,14 @@ export GPGPUSIM_ROOT="$( cd "$( dirname "$BASH_SOURCE" )" && pwd )"
+ 
+ GPGPUSIM_VERSION_STRING=`cat $GPGPUSIM_ROOT/version | awk '/Version/ {print $8}'`
+ #Detect Git branch and commit #
+-GIT_COMMIT=`git --git-dir=$GPGPUSIM_ROOT/.git log --abbrev-commit -n 1 | head -1 | sed -re 's/commit (.*)/\1/'`
+-GIT_FILES_CHANGED=`git --git-dir=$GPGPUSIM_ROOT/.git diff --numstat | wc | sed -re 's/^\s+([0-9]+).*/\1./'`
+-GIT_FILES_CHANGED+=`git --git-dir=$GPGPUSIM_ROOT/.git diff --numstat --cached | wc | sed -re 's/^\s+([0-9]+).*/\1/'`
++if [ -e "$GPGPUSIM_ROOT/.git" ]; then
++	GIT_COMMIT=`git --git-dir=$GPGPUSIM_ROOT/.git log --abbrev-commit -n 1 | head -1 | sed -re 's/commit (.*)/\1/'`
++	GIT_FILES_CHANGED=`git --git-dir=$GPGPUSIM_ROOT/.git diff --numstat | wc | sed -re 's/^\s+([0-9]+).*/\1./'`
++	GIT_FILES_CHANGED+=`git --git-dir=$GPGPUSIM_ROOT/.git diff --numstat --cached | wc | sed -re 's/^\s+([0-9]+).*/\1/'`
++else
++	GIT_COMMIT=rsync-tree
++	GIT_FILES_CHANGED=0.0
++fi
+ GPGPUSIM_BUILD_STRING="gpgpu-sim_git-commit-$GIT_COMMIT-modified_$GIT_FILES_CHANGED"
+ 
+ echo -n "GPGPU-Sim version $GPGPUSIM_VERSION_STRING (build $GPGPUSIM_BUILD_STRING) ";
+diff --git a/src/gpgpu-sim/icnt_wrapper.cc b/src/gpgpu-sim/icnt_wrapper.cc
+index 82785dc..d39bed0 100644
+--- a/src/gpgpu-sim/icnt_wrapper.cc
++++ b/src/gpgpu-sim/icnt_wrapper.cc
+@@ -27,10 +27,23 @@
+ // POSSIBILITY OF SUCH DAMAGE.
+ 
+ #include "icnt_wrapper.h"
++
+ #include <assert.h>
++
++#include <deque>
++#include <iostream>
++#include <memory>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++#include "../../../interconnect-wrapper/gpgpu_sim_noc_adapter.h"
++#include "../../../verilator-noc-lib/noc_verilator_wrapper.h"
+ #include "../intersim2/globals.hpp"
+ #include "../intersim2/interconnect_interface.hpp"
++#include "../option_parser.h"
+ #include "local_interconnect.h"
++#include "mem_fetch.h"
+ 
+ icnt_create_p icnt_create;
+ icnt_init_p icnt_init;
+@@ -50,11 +63,150 @@ char* g_network_config_filename;
+ struct inct_config g_inct_config;
+ LocalInterconnect* g_localicnt_interface;
+ 
+-#include "../option_parser.h"
++namespace {
++
++struct openbpu_icnt_config {
++  unsigned req_rtl_inputs;
++  unsigned req_rtl_outputs;
++  unsigned packet_bits;
++  unsigned flit_data_bits;
++  unsigned dest_bits;
++  unsigned vc_bits;
++  unsigned credit_width;
++  unsigned request_pending_per_input;
++  unsigned request_pending_per_output;
++  unsigned reset_cycles;
++  unsigned request_fixed_hops;
++  unsigned reply_fallback_latency;
++  unsigned reply_fallback_hops;
++  unsigned reply_pending_per_input;
++  unsigned reply_pending_per_output;
++  unsigned flit_size;
++};
++
++openbpu_icnt_config g_openbpu_config = {
++    80, 64, 64, 53, 7, 1, 5, 256, 4096, 5, 2, 20, 2, 256, 4096, 40};
++
++class FixedLatencyNoc : public openbpu::NocIf {
++ public:
++  FixedLatencyNoc(const std::string& name, uint32_t num_inputs,
++                  uint32_t num_outputs, uint32_t latency_cycles,
++                  uint32_t hop_count, uint32_t max_pending_per_input,
++                  uint32_t max_pending_per_output)
++      : NocIf(name),
++        num_inputs_(num_inputs),
++        num_outputs_(num_outputs),
++        latency_cycles_(latency_cycles),
++        hop_count_(hop_count),
++        source_depth_(num_inputs, 0),
++        pending_by_output_(num_outputs),
++        max_pending_per_input_(max_pending_per_input),
++        max_pending_per_output_(max_pending_per_output) {}
++
++ protected:
++  bool CanAccept(uint32_t src, uint32_t dst,
++                 const openbpu::NocPacket& packet) const override {
++    if (src >= num_inputs_ || dst >= num_outputs_ || packet.size == 0) {
++      return false;
++    }
++    if (source_depth_[src] >= max_pending_per_input_) {
++      return false;
++    }
++    return pending_by_output_[dst].size() < max_pending_per_output_;
++  }
++
++  bool PushImpl(const openbpu::NocPacket& packet) override {
++    if (!CanAccept(packet.src_id, packet.dst_id, packet)) {
++      return false;
++    }
++
++    Pending pending;
++    pending.packet = packet;
++    pending.ready_cycle = current_cycle() + latency_cycles_;
++    pending.hop_count = hop_count_;
++    pending_by_output_[packet.dst_id].push_back(pending);
++    ++source_depth_[packet.src_id];
++    return true;
++  }
++
++  bool PopImpl(uint32_t node, openbpu::NocPacket* packet,
++               uint32_t* hop_count) override {
++    if (node >= num_outputs_ || pending_by_output_[node].empty()) {
++      return false;
++    }
++
++    Pending& pending = pending_by_output_[node].front();
++    if (pending.ready_cycle > current_cycle()) {
++      return false;
++    }
++
++    *packet = pending.packet;
++    *hop_count = pending.hop_count;
++    pending_by_output_[node].pop_front();
++    assert(source_depth_[packet->src_id] > 0);
++    --source_depth_[packet->src_id];
++    return true;
++  }
++
++  void CycleImpl() override {}
++
++ private:
++  struct Pending {
++    openbpu::NocPacket packet;
++    uint64_t ready_cycle;
++    uint32_t hop_count;
++  };
++
++  uint32_t num_inputs_;
++  uint32_t num_outputs_;
++  uint32_t latency_cycles_;
++  uint32_t hop_count_;
++  std::vector<uint32_t> source_depth_;
++  std::vector<std::deque<Pending> > pending_by_output_;
++  uint32_t max_pending_per_input_;
++  uint32_t max_pending_per_output_;
++};
++
++std::unique_ptr<openbpu::GpgpuSimNocAdapter> g_openbpu_noc;
++unsigned g_openbpu_shader_nodes = 0;
++unsigned g_openbpu_memory_nodes = 0;
++
++openbpu::NocPacketType packet_type_from_mem_fetch(const void* data,
++                                                  unsigned input) {
++  if (data != 0) {
++    const mem_fetch* mf = static_cast<const mem_fetch*>(data);
++    switch (mf->get_type()) {
++      case READ_REQUEST:
++        return openbpu::NocPacketType::kRead;
++      case WRITE_REQUEST:
++        return openbpu::NocPacketType::kWrite;
++      case READ_REPLY:
++      case WRITE_ACK:
++        return openbpu::NocPacketType::kReply;
++    }
++  }
++
++  if (input >= g_openbpu_shader_nodes) {
++    return openbpu::NocPacketType::kReply;
++  }
++  return openbpu::NocPacketType::kRead;
++}
+ 
+-// Wrapper to intersim2 to accompany old icnt_wrapper
+-// TODO: use delegate/boost/c++11<funtion> instead
++void print_openbpu_network_stats(const char* prefix,
++                                 const openbpu::NocStatsSnapshot& stats) {
++  printf("%s_packets_injected = %llu\n", prefix,
++         (unsigned long long)stats.packets_injected);
++  printf("%s_packets_delivered = %llu\n", prefix,
++         (unsigned long long)stats.packets_delivered);
++  printf("%s_avg_latency_cycles = %0.4f\n", prefix, stats.avg_latency);
++  printf("%s_avg_hops = %0.4f\n", prefix, stats.avg_hops);
++  printf("%s_throughput_packets_per_cycle = %0.4f\n", prefix,
++         stats.packets_per_cycle);
++  printf("%s_throughput_bytes_per_cycle = %0.4f\n", prefix,
++         stats.bytes_per_cycle);
++}
+ 
++// Wrapper to intersim2 to accompany old icnt_wrapper.
+ static void intersim2_create(unsigned int n_shader, unsigned int n_mem) {
+   g_icnt_interface->CreateInterconnect(n_shader, n_mem);
+ }
+@@ -134,7 +286,153 @@ static unsigned LocalInterconnect_get_flit_size() {
+   return g_localicnt_interface->GetFlitSize();
+ }
+ 
+-///////////////////////////
++//////////////////////////////////////////////////////
++
++static void openbpu_verilator_create(unsigned int n_shader,
++                                     unsigned int n_mem) {
++  if (n_shader > g_openbpu_config.req_rtl_inputs) {
++    throw std::runtime_error(
++        "GPGPU-Sim shader cluster count exceeds OpenBPU RTL input ports");
++  }
++  if (n_mem > g_openbpu_config.req_rtl_outputs) {
++    throw std::runtime_error(
++        "GPGPU-Sim memory sub-partition count exceeds OpenBPU RTL output ports");
++  }
++
++  openbpu::NocVerilatorWrapper::Config request_config;
++  request_config.num_input_nodes = g_openbpu_config.req_rtl_inputs;
++  request_config.num_output_nodes = g_openbpu_config.req_rtl_outputs;
++  request_config.packet_bits = g_openbpu_config.packet_bits;
++  request_config.flit_data_bits = g_openbpu_config.flit_data_bits;
++  request_config.dest_bits = g_openbpu_config.dest_bits;
++  request_config.vc_bits = g_openbpu_config.vc_bits;
++  request_config.credit_width = g_openbpu_config.credit_width;
++  request_config.max_pending_per_input =
++      g_openbpu_config.request_pending_per_input;
++  request_config.max_pending_per_output =
++      g_openbpu_config.request_pending_per_output;
++  request_config.reset_cycles = g_openbpu_config.reset_cycles;
++  request_config.fixed_hops = g_openbpu_config.request_fixed_hops;
++
++  std::unique_ptr<openbpu::NocIf> request_noc(
++      new openbpu::NocVerilatorWrapper(request_config));
++  std::unique_ptr<openbpu::NocIf> reply_noc(new FixedLatencyNoc(
++      "openbpu-reply-fallback", n_mem, n_shader,
++      g_openbpu_config.reply_fallback_latency,
++      g_openbpu_config.reply_fallback_hops,
++      g_openbpu_config.reply_pending_per_input,
++      g_openbpu_config.reply_pending_per_output));
++
++  g_openbpu_shader_nodes = n_shader;
++  g_openbpu_memory_nodes = n_mem;
++  g_openbpu_noc.reset(new openbpu::GpgpuSimNocAdapter(
++      std::move(request_noc), std::move(reply_noc), n_shader, n_mem));
++}
++
++static void openbpu_verilator_init() {}
++
++static bool openbpu_verilator_has_buffer(unsigned input, unsigned int size) {
++  assert(g_openbpu_noc.get() != 0);
++  openbpu::GpgpuSimNocAdapter::PacketHandle handle;
++  handle.size = size;
++  handle.type = input >= g_openbpu_shader_nodes ? openbpu::NocPacketType::kReply
++                                                : openbpu::NocPacketType::kRead;
++  return g_openbpu_noc->HasBuffer(input, handle);
++}
++
++static void openbpu_verilator_push(unsigned input, unsigned output, void* data,
++                                   unsigned int size) {
++  assert(g_openbpu_noc.get() != 0);
++  openbpu::GpgpuSimNocAdapter::PacketHandle handle;
++  handle.payload = data;
++  handle.size = size;
++  handle.type = packet_type_from_mem_fetch(data, input);
++  if (!g_openbpu_noc->Push(input, output, handle)) {
++    throw std::runtime_error("OpenBPU NoC push failed after buffer admission");
++  }
++}
++
++static void* openbpu_verilator_pop(unsigned output) {
++  assert(g_openbpu_noc.get() != 0);
++  openbpu::GpgpuSimNocAdapter::PacketHandle handle;
++  openbpu::NocDeliveredPacket delivered;
++  if (!g_openbpu_noc->Pop(output, &handle, &delivered)) {
++    return 0;
++  }
++  if (handle.payload != 0 && output >= g_openbpu_shader_nodes) {
++    mem_fetch* mf = static_cast<mem_fetch*>(handle.payload);
++    const unsigned global_spid = output - g_openbpu_shader_nodes;
++    const unsigned mf_spid = mf->get_sub_partition_id();
++    const unsigned mf_chip = mf->get_tlx_addr().chip;
++    if (global_spid != mf_spid) {
++      fprintf(stderr,
++              "[openbpu][pop-mismatch] output_mem=%u mf_spid=%u mf_chip=%u "
++              "packet_id=%llu delivered_dst=%u hops=%u latency=%u\n",
++              global_spid, mf_spid, mf_chip,
++              (unsigned long long)delivered.packet.packet_id,
++              delivered.packet.dst_id, delivered.hop_count,
++              delivered.latency_cycles);
++    }
++  }
++  return handle.payload;
++}
++
++static void openbpu_verilator_transfer() {
++  assert(g_openbpu_noc.get() != 0);
++  g_openbpu_noc->Cycle();
++}
++
++static bool openbpu_verilator_busy() {
++  return g_openbpu_noc.get() != 0 && g_openbpu_noc->Busy();
++}
++
++static void openbpu_verilator_display_stats() {
++  assert(g_openbpu_noc.get() != 0);
++  const openbpu::NocStatsSnapshot request = g_openbpu_noc->RequestStats();
++  const openbpu::NocStatsSnapshot reply = g_openbpu_noc->ReplyStats();
++
++  print_openbpu_network_stats("Req_Network_", request);
++  printf("\n");
++  print_openbpu_network_stats("Reply_Network_", reply);
++  printf("\n");
++  g_openbpu_noc->PrintStats(std::cout);
++}
++
++static void openbpu_verilator_display_overall_stats() {
++  openbpu_verilator_display_stats();
++}
++
++static void openbpu_verilator_display_state(FILE* fp) {
++  const openbpu::NocStatsSnapshot request =
++      g_openbpu_noc.get() != 0 ? g_openbpu_noc->RequestStats()
++                               : openbpu::NocStatsSnapshot();
++  const openbpu::NocStatsSnapshot reply =
++      g_openbpu_noc.get() != 0 ? g_openbpu_noc->ReplyStats()
++                               : openbpu::NocStatsSnapshot();
++  fprintf(fp,
++          "OpenBPU NoC backend: shaders=%u, memory_nodes=%u, busy=%s, "
++          "req_inflight=%llu, req_delivered=%llu, reply_inflight=%llu, "
++          "reply_delivered=%llu, adapter_outstanding=%llu, "
++          "adapter_reordered=%llu\n",
++          g_openbpu_shader_nodes, g_openbpu_memory_nodes,
++          openbpu_verilator_busy() ? "yes" : "no",
++          (unsigned long long)request.inflight_packets,
++          (unsigned long long)request.packets_delivered,
++          (unsigned long long)reply.inflight_packets,
++          (unsigned long long)reply.packets_delivered,
++          (unsigned long long)(g_openbpu_noc.get() != 0
++                                   ? g_openbpu_noc->OutstandingPayloadCount()
++                                   : 0),
++          (unsigned long long)(g_openbpu_noc.get() != 0
++                                   ? g_openbpu_noc->ReorderedRequestCount()
++                                   : 0));
++}
++
++static unsigned openbpu_verilator_get_flit_size() {
++  return g_openbpu_config.flit_size;
++}
++
++}  // namespace
+ 
+ void icnt_reg_options(class OptionParser* opp) {
+   option_parser_register(opp, "-network_mode", OPT_INT32, &g_network_mode,
+@@ -143,7 +441,7 @@ void icnt_reg_options(class OptionParser* opp) {
+                          &g_network_config_filename,
+                          "Interconnection network config file", "mesh");
+ 
+-  // parameters for local xbar
++  // Parameters for local xbar.
+   option_parser_register(opp, "-icnt_in_buffer_limit", OPT_UINT32,
+                          &g_inct_config.in_buffer_limit, "in_buffer_limit",
+                          "64");
+@@ -158,12 +456,65 @@ void icnt_reg_options(class OptionParser* opp) {
+                          &g_inct_config.verbose, "inct_verbose", "0");
+   option_parser_register(opp, "-icnt_grant_cycles", OPT_UINT32,
+                          &g_inct_config.grant_cycles, "grant_cycles", "1");
++
++  // Parameters for the OpenBPU request-path Verilator backend.
++  option_parser_register(opp, "-openbpu_req_rtl_inputs", OPT_UINT32,
++                         &g_openbpu_config.req_rtl_inputs,
++                         "OpenBPU request-network RTL input port count", "80");
++  option_parser_register(opp, "-openbpu_req_rtl_outputs", OPT_UINT32,
++                         &g_openbpu_config.req_rtl_outputs,
++                         "OpenBPU request-network RTL output port count", "64");
++  option_parser_register(opp, "-openbpu_packet_bits", OPT_UINT32,
++                         &g_openbpu_config.packet_bits,
++                         "Packed OpenBPU flit width exposed to Verilator", "64");
++  option_parser_register(opp, "-openbpu_flit_data_bits", OPT_UINT32,
++                         &g_openbpu_config.flit_data_bits,
++                         "OpenBPU flit payload bit count", "53");
++  option_parser_register(opp, "-openbpu_dest_bits", OPT_UINT32,
++                         &g_openbpu_config.dest_bits,
++                         "OpenBPU destination field bit count", "7");
++  option_parser_register(opp, "-openbpu_vc_bits", OPT_UINT32,
++                         &g_openbpu_config.vc_bits,
++                         "OpenBPU virtual-channel field bit count", "1");
++  option_parser_register(opp, "-openbpu_credit_width", OPT_UINT32,
++                         &g_openbpu_config.credit_width,
++                         "OpenBPU credit signal width", "5");
++  option_parser_register(opp, "-openbpu_req_pending_per_input", OPT_UINT32,
++                         &g_openbpu_config.request_pending_per_input,
++                         "OpenBPU request-network software-side input queue depth",
++                         "8");
++  option_parser_register(opp, "-openbpu_req_pending_per_output", OPT_UINT32,
++                         &g_openbpu_config.request_pending_per_output,
++                         "OpenBPU request-network software-side output queue depth",
++                         "64");
++  option_parser_register(opp, "-openbpu_reset_cycles", OPT_UINT32,
++                         &g_openbpu_config.reset_cycles,
++                         "Cycles to hold the Verilated OpenBPU model in reset",
++                         "5");
++  option_parser_register(opp, "-openbpu_req_fixed_hops", OPT_UINT32,
++                         &g_openbpu_config.request_fixed_hops,
++                         "Fixed hop count recorded for OpenBPU request packets",
++                         "2");
++  option_parser_register(opp, "-openbpu_reply_latency", OPT_UINT32,
++                         &g_openbpu_config.reply_fallback_latency,
++                         "Fallback reply-network latency in cycles", "20");
++  option_parser_register(opp, "-openbpu_reply_hops", OPT_UINT32,
++                         &g_openbpu_config.reply_fallback_hops,
++                         "Fallback reply-network hop count", "2");
++  option_parser_register(opp, "-openbpu_reply_pending_per_input", OPT_UINT32,
++                         &g_openbpu_config.reply_pending_per_input,
++                         "Fallback reply-network per-input queue depth", "8");
++  option_parser_register(opp, "-openbpu_reply_pending_per_output", OPT_UINT32,
++                         &g_openbpu_config.reply_pending_per_output,
++                         "Fallback reply-network per-output queue depth", "64");
++  option_parser_register(opp, "-openbpu_flit_size", OPT_UINT32,
++                         &g_openbpu_config.flit_size,
++                         "OpenBPU backend flit size in bytes", "40");
+ }
+ 
+ void icnt_wrapper_init() {
+   switch (g_network_mode) {
+     case INTERSIM:
+-      // FIXME: delete the object: may add icnt_done wrapper
+       g_icnt_interface = InterconnectInterface::New(g_network_config_filename);
+       icnt_create = intersim2_create;
+       icnt_init = intersim2_init;
+@@ -191,6 +542,19 @@ void icnt_wrapper_init() {
+       icnt_display_state = LocalInterconnect_display_state;
+       icnt_get_flit_size = LocalInterconnect_get_flit_size;
+       break;
++    case OPENBPU_VERILATOR:
++      icnt_create = openbpu_verilator_create;
++      icnt_init = openbpu_verilator_init;
++      icnt_has_buffer = openbpu_verilator_has_buffer;
++      icnt_push = openbpu_verilator_push;
++      icnt_pop = openbpu_verilator_pop;
++      icnt_transfer = openbpu_verilator_transfer;
++      icnt_busy = openbpu_verilator_busy;
++      icnt_display_stats = openbpu_verilator_display_stats;
++      icnt_display_overall_stats = openbpu_verilator_display_overall_stats;
++      icnt_display_state = openbpu_verilator_display_state;
++      icnt_get_flit_size = openbpu_verilator_get_flit_size;
++      break;
+     default:
+       assert(0);
+       break;
+diff --git a/src/gpgpu-sim/icnt_wrapper.h b/src/gpgpu-sim/icnt_wrapper.h
+index a92f368..2a973c0 100644
+--- a/src/gpgpu-sim/icnt_wrapper.h
++++ b/src/gpgpu-sim/icnt_wrapper.h
+@@ -61,7 +61,12 @@ extern icnt_display_state_p icnt_display_state;
+ extern icnt_get_flit_size_p icnt_get_flit_size;
+ extern unsigned g_network_mode;
+ 
+-enum network_mode { INTERSIM = 1, LOCAL_XBAR = 2, N_NETWORK_MODE };
++enum network_mode {
++  INTERSIM = 1,
++  LOCAL_XBAR = 2,
++  OPENBPU_VERILATOR = 3,
++  N_NETWORK_MODE
++};
+ 
+ void icnt_wrapper_init();
+ void icnt_reg_options(class OptionParser* opp);
